@@ -1,0 +1,9 @@
+{
+  "id": "login-session-flow",
+  "title": "Secure login and session flow",
+  "goal": "Make the login flow secure across auth.py, sessions.py, and app.py. Only correct credentials may create a session. A profile is available only with an active token. Logging out revokes exactly that token while other sessions remain active. Preserve the public class and method names used by the tests.",
+  "fixture_dir": "../fixtures/login_flow",
+  "editable_files": ["auth.py", "sessions.py", "app.py"],
+  "acceptance_check": ["{python}", "-m", "unittest", "-v"],
+  "max_steps": 16
+}

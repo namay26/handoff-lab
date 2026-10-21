@@ -12,6 +12,16 @@ python3 -m handoff_lab run
 
 The default **scripted demo actor** reads `auth.py`, fixes an intentional password-checking bug, runs the tests, and asks to finish. The harness independently reruns the test command before marking the run `DONE`. The command prints a path to `viewer.html`; open it in a browser to inspect each step. The source fixture is copied into a new run directory, so the sample remains unchanged.
 
+## Run the longer login-flow task
+
+`tasks/login_flow.json` is a three-file task covering credential checks, active sessions, profile access, and logout. It allows up to 16 model steps. The fixed tests start with three failures, and the agent may edit only `auth.py`, `sessions.py`, and `app.py` in its isolated workspace. Run it with a live model:
+
+```bash
+python3 -m handoff_lab run tasks/login_flow.json --model gemini --model-name gemini-2.5-flash-lite
+```
+
+The scripted demo actor is specific to the smaller `tasks/login.json` fixture.
+
 ## Run with your Gemini key
 
 In a terminal, enter the project directory and load your key. The hidden prompt keeps the key out of terminal history. This needs no extra Python packages or region setting.
