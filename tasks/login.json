@@ -1,0 +1,9 @@
+{
+  "id": "login-auth-bug",
+  "title": "Reject incorrect login passwords",
+  "goal": "Fix authenticate() so only the configured password works for an existing user. Keep valid login working.",
+  "fixture_dir": "../fixtures/login",
+  "editable_files": ["auth.py"],
+  "acceptance_check": ["{python}", "-m", "unittest", "-v"],
+  "max_steps": 8
+}
