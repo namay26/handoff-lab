@@ -9,6 +9,7 @@ import math
 from datetime import datetime
 from pathlib import Path
 
+from .comparison import summarize_run
 from .runner import run_task
 from .models import list_gemini_models
 from .viewer import render_viewer
@@ -42,9 +43,13 @@ def main() -> None:
     run.add_argument("--out", type=Path, help="new run directory")
     run.add_argument("--request-timeout", type=float, default=45, help="Gemini socket timeout in seconds (default: 45)")
     run.add_argument("--retries", type=int, default=1, help="Gemini transient-error retries, 0 to 3 (default: 1)")
+    run.add_argument("--context-policy", choices=["full", "compact"], default="full", help="model history policy (default: full)")
+    run.add_argument("--context-threshold", type=int, default=1500, help="compact after a prompt reaches this token count (default: 1500)")
 
     view = sub.add_parser("view", help="regenerate the HTML trace viewer")
     view.add_argument("run_dir", type=Path)
+    compare = sub.add_parser("compare", help="compare saved run outcomes and context costs")
+    compare.add_argument("run_dirs", type=Path, nargs="+", help="run directories to compare")
     sub.add_parser("models", help="list Gemini models available to your API key")
 
     args = parser.parse_args()
@@ -57,6 +62,12 @@ def main() -> None:
     if args.command == "view":
         print(render_viewer(args.run_dir.resolve()))
         return
+    if args.command == "compare":
+        try:
+            print(json.dumps([summarize_run(path) for path in args.run_dirs], indent=2))
+        except (OSError, ValueError, KeyError) as exc:
+            parser.error(str(exc))
+        return
 
     if args.model in {"openai", "bedrock", "gemini"} and not args.model_name:
         parser.error("--model-name is required with a live model")
@@ -66,13 +77,18 @@ def main() -> None:
         parser.error("--request-timeout must be a positive number")
     if not 0 <= args.retries <= 3:
         parser.error("--retries must be between 0 and 3")
+    if args.context_threshold <= 0:
+        parser.error("--context-threshold must be positive")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = (args.out or PROJECT / "runs" / f"{stamp}-{args.model}").resolve()
     try:
-        result = run_task(args.task, run_dir, args.model, args.model_name, args.region, args.request_timeout, args.retries)
+        result = run_task(
+            args.task, run_dir, args.model, args.model_name, args.region,
+            args.request_timeout, args.retries, args.context_policy, args.context_threshold,
+        )
     except (ValueError, FileExistsError) as exc:
         parser.error(str(exc))
     viewer = render_viewer(run_dir)
-    print(json.dumps({"run_status": result["run_status"], "state": result["state"], "passed": result["passed"], "error": result["error"], "run": str(run_dir), "viewer": str(viewer)}, indent=2))
+    print(json.dumps({"run_status": result["run_status"], "state": result["state"], "passed": result["passed"], "steps": result["steps"], "prompt_tokens": result["prompt_tokens"], "compactions": result["compactions"], "error": result["error"], "run": str(run_dir), "viewer": str(viewer)}, indent=2))
     if not result["passed"]:
         raise SystemExit(1)

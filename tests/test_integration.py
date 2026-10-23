@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from handoff_lab.comparison import summarize_run
+from handoff_lab.context import ContextWindow
 from handoff_lab.models import BedrockModel, GeminiModel, ModelReply, gemini_request, list_gemini_models
 from handoff_lab.runner import execute_action, run_task
 from handoff_lab.viewer import render_viewer
@@ -29,6 +31,52 @@ class FinishOnlyModel:
 
 
 class HarnessIntegrationTests(unittest.TestCase):
+    def test_compaction_retains_three_recent_steps_and_drops_old_tool_outputs(self):
+        history = [
+            {"step": step, "action": {"action": "read_file", "path": f"file{step}.py"},
+             "observation": {"content": f"old-source-{step}"}}
+            for step in range(1, 7)
+        ]
+        window = ContextWindow("compact", 100)
+        self.assertIsNone(window.compact(history, 99))
+        event = window.compact(history, 100)
+        context = window.context_history(history)
+        self.assertEqual([turn["step"] for turn in context["history"]], [4, 5, 6])
+        self.assertEqual(context["summary"]["files_read"], ["file1.py", "file2.py", "file3.py"])
+        self.assertEqual(event["retained_steps"], [4, 5, 6])
+        self.assertNotIn("old-source-1", json.dumps(context))
+        self.assertIn("old-source-4", json.dumps(context))
+
+    def test_compaction_carries_verified_test_outcome(self):
+        history = [
+            {"step": 1, "action": {"action": "run_tests"},
+             "observation": {"passed": False, "exit_code": 1, "stderr": "FAIL: test_login\nlong log", "stdout": ""}},
+            *({"step": step, "action": {"action": "read_file", "path": "auth.py"},
+               "observation": {"content": "source"}} for step in range(2, 6)),
+        ]
+        window = ContextWindow("compact", 1)
+        window.compact(history, 1)
+        summary = window.context_history(history)["summary"]
+        self.assertEqual(summary["latest_test"], {"step": 1, "passed": False, "exit_code": 1, "failures": ["FAIL: test_login"]})
+        self.assertNotIn("long log", json.dumps(summary))
+
+    def test_compact_run_keeps_complete_trace_and_acceptance_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with patch("handoff_lab.runner.ScriptedModel", FinishOnlyModel):
+                result = run_task(TASK, run_dir, "scripted", context_policy="compact", context_threshold=1)
+            events = [json.loads(line) for line in (run_dir / "trace.jsonl").read_text().splitlines()]
+            compacted = [event for event in events if event["kind"] == "context_compaction"]
+            calls = [event for event in events if event["kind"] == "model_call"]
+            self.assertTrue(compacted)
+            self.assertEqual([turn["step"] for turn in calls[4]["data"]["input"]["history"]], [2, 3, 4])
+            self.assertEqual(len([event for event in events if event["kind"] == "tool_result"]), 8)
+            self.assertEqual(result["state"], "NEEDS_CHANGES")
+            self.assertFalse(result["passed"])
+            comparison = summarize_run(run_dir)
+            self.assertEqual(comparison["compactions"], result["compactions"])
+            self.assertEqual(comparison["model_calls"], 8)
+
     def test_gemini_timeout_retries_then_recovers(self):
         with patch.dict("os.environ", {"GEMINI_API_KEY": "test-secret"}):
             with patch("handoff_lab.models.urllib.request.urlopen", side_effect=[TimeoutError("stalled"), io.BytesIO(b'{"ok":true}')]) as send:

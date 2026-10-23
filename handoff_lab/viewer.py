@@ -64,9 +64,9 @@ HTML = """<!doctype html>
 </head>
 <body>
 <header>
-  <div class="eyebrow">Handoff Lab / Session 1</div>
+  <div class="eyebrow">Handoff Lab / Agent trace</div>
   <h1 id="title"></h1>
-  <div class="meta"><span id="status"></span><span id="model"></span><span id="steps"></span></div>
+  <div class="meta"><span id="status"></span><span id="model"></span><span id="steps"></span><span id="policy"></span><span id="tokens"></span></div>
   <pre id="run-error" hidden style="color:var(--bad);padding:12px 0 0;max-height:none"></pre>
 </header>
 <main>
@@ -81,6 +81,8 @@ document.getElementById('title').textContent = result.title;
 document.getElementById('status').innerHTML = '<span class="pill ' + (result.passed ? 'passed' : 'failed') + '">' + result.state + '</span>';
 document.getElementById('model').textContent = 'Model: ' + result.model;
 document.getElementById('steps').textContent = 'Steps: ' + result.steps;
+document.getElementById('policy').textContent = 'Context: ' + (result.context_policy || 'full') + ' · compactions: ' + (result.compactions || 0);
+document.getElementById('tokens').textContent = result.prompt_tokens ? 'Prompt tokens: ' + result.prompt_tokens : '';
 if (result.error) {
   document.getElementById('status').textContent = 'Run error · task state: ' + result.state;
   const error = document.getElementById('run-error');
@@ -91,6 +93,7 @@ const timeline = document.getElementById('timeline');
 function label(e) {
   const d = e.data;
   if (e.kind === 'model_call') return 'Model chose ' + (d.action?.action || 'action');
+  if (e.kind === 'context_compaction') return 'Compacted steps ' + d.from_step + '–' + d.through_step;
   if (e.kind === 'tool_result') return 'Tool result: ' + d.action;
   if (e.kind === 'acceptance_check') return (d.phase || 'check') + ' check: ' + (d.passed ? 'passed' : 'failed');
   if (e.kind === 'state') return 'State: ' + d.to_state;
@@ -110,6 +113,15 @@ function select(e, button) {
   const details = document.getElementById('details'); details.replaceChildren();
   if (e.kind === 'model_call') {
     details.append(card('Exact model input', e.data.input), card('Chosen action', e.data.action), card('Usage', e.data.usage));
+  } else if (e.kind === 'context_compaction') {
+    details.append(card('Compaction decision', {
+      threshold: e.data.threshold,
+      trigger_prompt_tokens: e.data.trigger_prompt_tokens,
+      compacted_steps: [e.data.from_step, e.data.through_step],
+      retained_steps: e.data.retained_steps,
+      estimated_tokens_before: e.data.estimated_tokens_before,
+      estimated_tokens_after: e.data.estimated_tokens_after
+    }), card('Summary sent on next model call', e.data.summary));
   } else if (e.kind === 'tool_result') {
     details.append(card('Tool observation', e.data.result));
   } else if (e.kind === 'acceptance_check') {

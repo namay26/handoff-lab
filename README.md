@@ -22,6 +22,16 @@ python3 -m handoff_lab run tasks/login_flow.json --model gemini --model-name gem
 
 The scripted demo actor is specific to the smaller `tasks/login.json` fixture.
 
+## Compare full and compact context
+
+The default `full` policy sends every prior action and tool result at each step. The `compact` policy waits until a model call reaches the token threshold, then replaces older history with a small structured summary while preserving the latest three action–observation steps. The summary records files read, files edited, and the latest test outcome; it omits old file contents and test logs. The agent can read a file or rerun tests when it needs those details. Compaction uses no extra model call, and the full trace remains available for inspection.
+
+```bash
+python3 -m handoff_lab run tasks/login_flow.json --model gemini --model-name gemini-flash-lite-latest --context-policy compact --context-threshold 1500
+```
+
+The threshold uses the previous call's reported input tokens, so a compaction takes effect on the following step. The trace viewer shows each compaction, the summary, the retained steps, and every exact model input. The run result reports total prompt tokens and compaction count. Compare saved runs with `python3 -m handoff_lab compare RUN_DIR_1 RUN_DIR_2`; completion, repeated file reads, and token use all matter. A saved trace can be replayed to inspect context construction, but it cannot predict what a model would do with different context.
+
 ## Run with your Gemini key
 
 Paste your key after `GEMINI_API_KEY=` in the project-root `.env` file. The CLI loads it automatically, and Git ignores the file. An already exported `GEMINI_API_KEY` takes precedence. This needs no extra Python packages or region setting.

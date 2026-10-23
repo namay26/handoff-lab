@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .context import ContextWindow, estimate_tokens, prompt_tokens
 from .models import BedrockModel, GeminiModel, OpenAIModel, ScriptedModel
 
 
@@ -104,6 +105,8 @@ def run_task(
     region: str | None = None,
     request_timeout: float = 45,
     retries: int = 1,
+    context_policy: str = "full",
+    context_threshold: int = 1500,
 ) -> dict[str, Any]:
     task_file = task_file.resolve()
     task = json.loads(task_file.read_text(encoding="utf-8"))
@@ -112,6 +115,7 @@ def run_task(
         raise ValueError(f"Fixture directory does not exist: {fixture}")
     if run_dir.exists():
         raise FileExistsError(f"Run directory already exists: {run_dir}")
+    context_window = ContextWindow(context_policy, context_threshold)
 
     if model_kind == "scripted":
         model = ScriptedModel()
@@ -135,6 +139,8 @@ def run_task(
         "started_at": timestamp(),
         "source_task": str(task_file),
         "workspace": str(workspace.resolve()),
+        "context_policy": context_policy,
+        "context_threshold": context_threshold if context_policy == "compact" else None,
     }
     (run_dir / "run.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
@@ -145,22 +151,33 @@ def run_task(
     trace.add("state", 0, from_state=None, to_state=state)
     error: str | None = None
     steps_taken = 0
+    previous_prompt_tokens: int | None = None
+    total_prompt_tokens = 0
+    compactions = 0
 
     for step in range(1, int(task.get("max_steps", 8)) + 1):
         steps_taken = step
+        compaction = context_window.compact(history, previous_prompt_tokens)
+        if compaction:
+            compactions += 1
+            trace.add("context_compaction", step, **compaction)
         context = {
             "task": {"id": task["id"], "goal": task["goal"]},
             "state": state,
             "acceptance_check": task["acceptance_check"],
             "files": sorted(str(p.relative_to(workspace)) for p in workspace.rglob("*") if p.is_file() and "__pycache__" not in p.parts),
             "editable_files": task.get("editable_files", []),
-            "history": history,
+            **context_window.context_history(history),
         }
         try:
             print(f"Step {step}: requesting next action from {model.label}", file=sys.stderr, flush=True)
             if isinstance(model, GeminiModel):
                 model.on_event = lambda kind, **data: trace.add(kind, step, **data)
             reply = model.next_action(context)
+            actual_prompt_tokens = prompt_tokens(reply.usage)
+            previous_prompt_tokens = actual_prompt_tokens or estimate_tokens(context)
+            if actual_prompt_tokens is not None:
+                total_prompt_tokens += actual_prompt_tokens
             print(f"Step {step}: {reply.action.get('action', 'invalid action')}", file=sys.stderr, flush=True)
             trace.add(
                 "model_call",
@@ -204,6 +221,8 @@ def run_task(
         "run_status": "ERROR" if error else ("COMPLETED" if state == "DONE" else "STEP_LIMIT"),
         "steps": steps_taken,
         "error": error,
+        "prompt_tokens": total_prompt_tokens,
+        "compactions": compactions,
     }
     (run_dir / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
