@@ -24,11 +24,9 @@ The scripted demo actor is specific to the smaller `tasks/login.json` fixture.
 
 ## Run with your Gemini key
 
-In a terminal, enter the project directory and load your key. The hidden prompt keeps the key out of terminal history. This needs no extra Python packages or region setting.
+Paste your key after `GEMINI_API_KEY=` in the project-root `.env` file. The CLI loads it automatically, and Git ignores the file. An already exported `GEMINI_API_KEY` takes precedence. This needs no extra Python packages or region setting.
 
 ```bash
-read -rsp 'Gemini API key: ' GEMINI_API_KEY; echo
-export GEMINI_API_KEY
 python3 -m handoff_lab models
 ```
 

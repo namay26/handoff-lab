@@ -17,7 +17,20 @@ from .viewer import render_viewer
 PROJECT = Path(__file__).resolve().parent.parent
 
 
+def load_gemini_key() -> None:
+    env_file = PROJECT / ".env"
+    if not env_file.is_file() or os.environ.get("GEMINI_API_KEY"):
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        if line.startswith("GEMINI_API_KEY="):
+            key = line.partition("=")[2].strip().strip('"\'')
+            if key:
+                os.environ["GEMINI_API_KEY"] = key
+            return
+
+
 def main() -> None:
+    load_gemini_key()
     parser = argparse.ArgumentParser(prog="handoff", description="Run and inspect coding-agent traces")
     sub = parser.add_subparsers(dest="command", required=True)
 
