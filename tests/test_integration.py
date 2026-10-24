@@ -11,7 +11,7 @@ from unittest.mock import patch
 from handoff_lab.comparison import summarize_run
 from handoff_lab.context import ContextWindow
 from handoff_lab.models import BedrockModel, GeminiModel, ModelReply, gemini_request, list_gemini_models
-from handoff_lab.runner import execute_action, run_task
+from handoff_lab.runner import execute_action, resume_task, run_task
 from handoff_lab.viewer import render_viewer
 
 
@@ -31,6 +31,51 @@ class FinishOnlyModel:
 
 
 class HarnessIntegrationTests(unittest.TestCase):
+    def test_checkpoint_resumes_with_fresh_history_and_agent_selected_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            first = run_task(TASK, run_dir, "scripted", pause_after=2)
+            saved = json.loads((run_dir / "checkpoint.json").read_text())
+            pause_events = [json.loads(line) for line in (run_dir / "trace.jsonl").read_text().splitlines()]
+            handoff_call = next(e for e in pause_events if e["kind"] == "handoff_call")
+            self.assertEqual(handoff_call["data"]["input"]["history"][-1]["step"], 2)
+            self.assertEqual(handoff_call["data"]["input"]["state"], "IMPLEMENTING")
+            self.assertEqual(first["run_status"], "PAUSED")
+            self.assertEqual(saved["last_step"], 2)
+            self.assertEqual(saved["files_read"][0]["path"], "auth.py")
+            self.assertEqual(saved["files_written"][0]["path"], "auth.py")
+            self.assertFalse(saved["files_read"][0]["current"])
+            self.assertTrue(saved["files_written"][0]["current"])
+            self.assertFalse(saved["latest_test"]["current"])
+            self.assertEqual(saved["agent_notes"]["status"], "unverified")
+            self.assertEqual(saved["agent_notes"]["workspace_digest"], saved["workspace_digest"])
+            self.assertTrue(saved["agent_notes"]["current"])
+
+            final = resume_task(run_dir)
+            events = [json.loads(line) for line in (run_dir / "trace.jsonl").read_text().splitlines()]
+            resumed = next(e for e in events if e["kind"] == "model_call" and e["data"]["session"] == 2)
+            self.assertEqual(resumed["data"]["input"]["history"], [])
+            self.assertEqual(resumed["data"]["action"], {"action": "read_file", "path": "auth.py"})
+            self.assertEqual(resumed["data"]["input"]["checkpoint"]["last_step"], 2)
+            self.assertEqual(final["run_status"], "COMPLETED")
+            self.assertEqual(final["sessions"], 2)
+            self.assertEqual(len({e["id"] for e in events}), len(events))
+
+    def test_external_edit_is_identified_on_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_task(TASK, run_dir, "scripted", pause_after=3)
+            source = run_dir / "workspace" / "auth.py"
+            source.write_text(source.read_text() + "\n# external edit\n")
+            resume_task(run_dir)
+            events = [json.loads(line) for line in (run_dir / "trace.jsonl").read_text().splitlines()]
+            resume = next(e for e in events if e["kind"] == "session_resume")
+            first_call = next(e for e in events if e["kind"] == "model_call" and e["data"]["session"] == 2)
+            self.assertEqual(resume["data"]["changed_files"], ["auth.py"])
+            self.assertFalse(first_call["data"]["input"]["checkpoint"]["latest_test"]["current"])
+            auth_write = next(x for x in first_call["data"]["input"]["checkpoint"]["files_written"] if x["path"] == "auth.py")
+            self.assertFalse(auth_write["current"])
+
     def test_compaction_retains_three_recent_steps_and_drops_old_tool_outputs(self):
         history = [
             {"step": step, "action": {"action": "read_file", "path": f"file{step}.py"},

@@ -13,8 +13,9 @@ def render_viewer(run_dir: Path) -> Path:
         for line in (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8")) if (run_dir / "checkpoint.json").exists() else None
     # Escape '<' so task text cannot close the JSON script tag.
-    payload = json.dumps({"result": result, "events": events}, ensure_ascii=False).replace(
+    payload = json.dumps({"result": result, "events": events, "checkpoint": checkpoint}, ensure_ascii=False).replace(
         "<", "\\u003c"
     )
     html = HTML.replace("__PAYLOAD__", payload)
@@ -66,21 +67,22 @@ HTML = """<!doctype html>
 <header>
   <div class="eyebrow">Handoff Lab / Agent trace</div>
   <h1 id="title"></h1>
-  <div class="meta"><span id="status"></span><span id="model"></span><span id="steps"></span><span id="policy"></span><span id="tokens"></span></div>
+  <div class="meta"><span id="status"></span><span id="model"></span><span id="steps"></span><span id="sessions"></span><span id="policy"></span><span id="tokens"></span></div>
   <pre id="run-error" hidden style="color:var(--bad);padding:12px 0 0;max-height:none"></pre>
 </header>
 <main>
-  <aside><h2>Trace timeline</h2><div id="timeline"></div></aside>
+  <aside><h2>Trace timeline</h2><button class="event" id="checkpoint-button">Current checkpoint</button><div id="timeline"></div></aside>
   <section><h2 id="detail-title">Select an event</h2><div id="details" class="hint">Every model input, tool result, and acceptance check is inspectable here.</div></section>
 </main>
 <script id="trace-data" type="application/json">__PAYLOAD__</script>
 <script>
 const data = JSON.parse(document.getElementById('trace-data').textContent);
-const {result, events} = data;
+const {result, events, checkpoint} = data;
 document.getElementById('title').textContent = result.title;
 document.getElementById('status').innerHTML = '<span class="pill ' + (result.passed ? 'passed' : 'failed') + '">' + result.state + '</span>';
 document.getElementById('model').textContent = 'Model: ' + result.model;
 document.getElementById('steps').textContent = 'Steps: ' + result.steps;
+document.getElementById('sessions').textContent = 'Sessions: ' + (result.sessions || 1);
 document.getElementById('policy').textContent = 'Context: ' + (result.context_policy || 'full') + ' · compactions: ' + (result.compactions || 0);
 document.getElementById('tokens').textContent = result.prompt_tokens ? 'Prompt tokens: ' + result.prompt_tokens : '';
 if (result.error) {
@@ -93,6 +95,11 @@ const timeline = document.getElementById('timeline');
 function label(e) {
   const d = e.data;
   if (e.kind === 'model_call') return 'Model chose ' + (d.action?.action || 'action');
+  if (e.kind === 'handoff_call') return 'Agent prepared handoff';
+  if (e.kind === 'handoff_note') return 'Unverified handoff notes';
+  if (e.kind === 'session_pause') return 'Session ' + d.session + ' paused';
+  if (e.kind === 'session_resume') return 'Session ' + d.session + ' resumed';
+  if (e.kind === 'session_start') return 'Session ' + d.session + ' started';
   if (e.kind === 'context_compaction') return 'Compacted steps ' + d.from_step + '–' + d.through_step;
   if (e.kind === 'tool_result') return 'Tool result: ' + d.action;
   if (e.kind === 'acceptance_check') return (d.phase || 'check') + ' check: ' + (d.passed ? 'passed' : 'failed');
@@ -111,7 +118,7 @@ function select(e, button) {
   button.classList.add('active');
   document.getElementById('detail-title').textContent = 'Step ' + e.step + ' · ' + label(e);
   const details = document.getElementById('details'); details.replaceChildren();
-  if (e.kind === 'model_call') {
+  if (e.kind === 'model_call' || e.kind === 'handoff_call') {
     details.append(card('Exact model input', e.data.input), card('Chosen action', e.data.action), card('Usage', e.data.usage));
   } else if (e.kind === 'context_compaction') {
     details.append(card('Compaction decision', {
@@ -138,6 +145,12 @@ events.forEach(e => {
   button.append(tag, strong, small); button.onclick = () => select(e, button);
   timeline.append(button);
 });
+document.getElementById('checkpoint-button').onclick = () => {
+  document.querySelectorAll('.event').forEach(x => x.classList.remove('active'));
+  document.getElementById('checkpoint-button').classList.add('active');
+  document.getElementById('detail-title').textContent = 'Current checkpoint';
+  document.getElementById('details').replaceChildren(card('Checkpoint JSON', checkpoint || 'No checkpoint saved'));
+};
 const first = timeline.querySelector('.event'); if (first) first.click();
 </script>
 </body>

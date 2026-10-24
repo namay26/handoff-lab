@@ -1,6 +1,6 @@
 # Handoff Lab
 
-A small coding-agent harness for studying context and handoffs. The current build includes a single-agent loop, an append-only JSONL trace, an acceptance check, and a standalone HTML trace viewer.
+A small coding-agent harness for studying context and handoffs. It records an append-only trace, runs fixed acceptance checks, and can pause a task for a fresh agent session.
 
 ## Run the included task
 
@@ -21,6 +21,18 @@ python3 -m handoff_lab run tasks/login_flow.json --model gemini --model-name gem
 ```
 
 The scripted demo actor is specific to the smaller `tasks/login.json` fixture.
+
+## Pause and resume with a checkpoint
+
+Use the longer task to compare a fresh session against an uninterrupted run:
+
+```bash
+python3 -m handoff_lab run tasks/login_flow.json --model gemini --model-name gemini-flash-lite-latest --pause-after 8
+python3 -m handoff_lab resume RUN_DIRECTORY
+python3 -m handoff_lab compare UNINTERRUPTED_RUN_DIRECTORY RUN_DIRECTORY
+```
+
+The first command saves `checkpoint.json` and exits with `PAUSED`. Resume creates a new model session with empty action history and passes the checkpoint. The model chooses which files to read. The checkpoint lists the goal, file hashes, prior reads and writes, latest test evidence, and an agent-written handoff note. The note is explicitly unverified. Tests are tied to a workspace digest; an edit makes an earlier result stale. Resume detects files changed outside the harness and records them in the trace. The trace viewer shows the handoff request, pause and resume events, the current checkpoint, and the exact first prompt after resume. Each session gets the task's step budget; global step numbers continue across sessions. Pausing uses one additional model call to write the handoff note.
 
 ## Compare full and compact context
 
@@ -69,12 +81,9 @@ Each run directory contains:
 - `workspace/`: isolated copy of the task fixture, including the resulting code.
 - `trace.jsonl`: every model input, chosen action, tool result, state change, and acceptance-check result.
 - `run.json` and `result.json`: run metadata and final outcome.
+- `checkpoint.json`: current versioned handoff state and evidence references.
 - `viewer.html`: interactive, self-contained timeline. Select an event to inspect its exact recorded data.
 
 Regenerate a viewer after processing a trace with `python3 -m handoff_lab view RUN_DIRECTORY`.
 
 Check the runner's completion gate with `python3 -m unittest discover -s tests -v`.
-
-## First build-session boundary
-
-The runner currently sends the complete recorded history to the model at every step. Context policies, forced resets, durable task checkpoints, and paired comparisons belong to the next build sessions. The trace format exists so those changes can be inspected and measured against this baseline.

@@ -15,7 +15,11 @@ from typing import Any
 
 
 SYSTEM_INSTRUCTIONS = """You are fixing one small coding task in a sandboxed workspace.
-Choose exactly one next action and return only a JSON object. Available actions:
+If handoff_only is true, return only a JSON object with this shape:
+  {"action":"handoff","learned":[{"file":"relative/path.py","interpretation":"what you infer"}],"remaining":["pending work"],"next_action":"specific next action"}
+These interpretations are unverified notes. Do not present them as test-backed facts.
+Otherwise, choose exactly one next action from the actions below.
+Return only a JSON object. Available actions:
   {"action":"read_file","path":"relative/path.py"}
   {"action":"write_file","path":"relative/path.py","content":"entire new file"}
   {"action":"run_tests"}
@@ -150,6 +154,9 @@ class ScriptedModel:
         ]
 
     def next_action(self, context: dict[str, Any]) -> ModelReply:
+        if context.get("handoff_only"):
+            action = {"action": "handoff", "learned": [], "remaining": ["Continue the task"], "next_action": "Read the relevant file"}
+            return ModelReply(action=action, raw_text=json.dumps(action), usage={})
         if self.index >= len(self.actions):
             action = {"action": "finish", "message": "No more scripted actions."}
         else:

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .comparison import summarize_run
-from .runner import run_task
+from .runner import resume_task, run_task
 from .models import list_gemini_models
 from .viewer import render_viewer
 
@@ -45,6 +45,18 @@ def main() -> None:
     run.add_argument("--retries", type=int, default=1, help="Gemini transient-error retries, 0 to 3 (default: 1)")
     run.add_argument("--context-policy", choices=["full", "compact"], default="full", help="model history policy (default: full)")
     run.add_argument("--context-threshold", type=int, default=1500, help="compact after a prompt reaches this token count (default: 1500)")
+    run.add_argument("--pause-after", type=int, help="pause after this many steps and write a handoff checkpoint")
+
+    resume = sub.add_parser("resume", help="resume a paused run in a fresh agent session")
+    resume.add_argument("run_dir", type=Path)
+    resume.add_argument("--model", choices=["scripted", "gemini", "bedrock", "openai"])
+    resume.add_argument("--model-name")
+    resume.add_argument("--region", default=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"))
+    resume.add_argument("--request-timeout", type=float, default=45)
+    resume.add_argument("--retries", type=int, default=1)
+    resume.add_argument("--context-policy", choices=["full", "compact"])
+    resume.add_argument("--context-threshold", type=int)
+    resume.add_argument("--pause-after", type=int)
 
     view = sub.add_parser("view", help="regenerate the HTML trace viewer")
     view.add_argument("run_dir", type=Path)
@@ -69,7 +81,7 @@ def main() -> None:
             parser.error(str(exc))
         return
 
-    if args.model in {"openai", "bedrock", "gemini"} and not args.model_name:
+    if args.command == "run" and args.model in {"openai", "bedrock", "gemini"} and not args.model_name:
         parser.error("--model-name is required with a live model")
     if args.model == "bedrock" and not args.region:
         parser.error("--region or AWS_REGION is required with --model bedrock")
@@ -77,18 +89,27 @@ def main() -> None:
         parser.error("--request-timeout must be a positive number")
     if not 0 <= args.retries <= 3:
         parser.error("--retries must be between 0 and 3")
-    if args.context_threshold <= 0:
+    if args.context_threshold is not None and args.context_threshold <= 0:
         parser.error("--context-threshold must be positive")
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = (args.out or PROJECT / "runs" / f"{stamp}-{args.model}").resolve()
     try:
-        result = run_task(
-            args.task, run_dir, args.model, args.model_name, args.region,
-            args.request_timeout, args.retries, args.context_policy, args.context_threshold,
-        )
-    except (ValueError, FileExistsError) as exc:
+        if args.command == "run":
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            run_dir = (args.out or PROJECT / "runs" / f"{stamp}-{args.model}").resolve()
+            result = run_task(
+                args.task, run_dir, args.model, args.model_name, args.region,
+                args.request_timeout, args.retries, args.context_policy, args.context_threshold,
+                args.pause_after,
+            )
+        else:
+            run_dir = args.run_dir.resolve()
+            result = resume_task(
+                run_dir, args.model, args.model_name, args.region,
+                args.request_timeout, args.retries, args.context_policy, args.context_threshold,
+                args.pause_after,
+            )
+    except (ValueError, FileExistsError, OSError, KeyError) as exc:
         parser.error(str(exc))
     viewer = render_viewer(run_dir)
-    print(json.dumps({"run_status": result["run_status"], "state": result["state"], "passed": result["passed"], "steps": result["steps"], "prompt_tokens": result["prompt_tokens"], "compactions": result["compactions"], "error": result["error"], "run": str(run_dir), "viewer": str(viewer)}, indent=2))
-    if not result["passed"]:
+    print(json.dumps({"run_status": result["run_status"], "state": result["state"], "passed": result["passed"], "steps": result["steps"], "sessions": result["sessions"], "prompt_tokens": result["prompt_tokens"], "compactions": result["compactions"], "error": result["error"], "run": str(run_dir), "checkpoint": str(run_dir / "checkpoint.json"), "viewer": str(viewer)}, indent=2))
+    if result["run_status"] not in {"COMPLETED", "PAUSED"}:
         raise SystemExit(1)
