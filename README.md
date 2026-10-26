@@ -45,6 +45,14 @@ python3 -m handoff_lab experiment runs/paused-source --out runs/paired-experimen
 
 The experiment clones the paused workspace and trace for each trial. Both conditions start with empty new-session history. The checkpoint condition receives the saved handoff; the minimal condition receives the goal, state, available files, and acceptance command without that handoff. Trial order alternates. `experiment.html` links to each trace and compares post-resume completion, actions, prompt tokens, test runs, and reads of a file version already read before the pause. It reports the shared handoff-generation cost separately. The source run remains paused and unchanged. If a provider error stops a trial, rerun the same experiment command to retry that condition from the paused source; the failed attempt remains visible. A few stochastic trials are an exploratory comparison, not a general performance claim.
 
+To test individual checkpoint components from the same paused source, choose the conditions explicitly:
+
+```bash
+python3 -m handoff_lab experiment runs/paused-source --out runs/ablation --repeats 1 --conditions checkpoint,without-notes,without-tests,without-files
+```
+
+Each `without-*` condition removes just the named checkpoint fields from the fresh session's prompt. The saved checkpoint and original paused run remain intact. The file condition removes read/write records and the file manifest; the current file-name list in the ordinary task prompt remains available.
+
 ## Compare full and compact context
 
 The default `full` policy sends every prior action and tool result at each step. The `compact` policy waits until a model call reaches the token threshold, then replaces older history with a small structured summary while preserving the latest three action–observation steps. The summary records files read, files edited, and the latest test outcome; it omits old file contents and test logs. The agent can read a file or rerun tests when it needs those details. Compaction uses no extra model call, and the full trace remains available for inspection.

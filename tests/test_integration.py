@@ -59,6 +59,27 @@ class HarnessIntegrationTests(unittest.TestCase):
             self.assertEqual(len(retried["trials"]), 3)
             self.assertTrue((root / "experiment" / "trial-1-checkpoint-retry-2" / "viewer.html").exists())
 
+    def test_ablation_conditions_remove_only_selected_checkpoint_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            run_task(TASK, source, "scripted", pause_after=2)
+            report = run_experiment(source, root / "ablation", repeats=1,
+                                    conditions=("checkpoint", "without-notes", "without-tests", "without-files"))
+            omitted = {
+                "checkpoint": set(),
+                "without-notes": {"agent_notes"},
+                "without-tests": {"latest_test"},
+                "without-files": {"files_read", "files_written", "workspace_files"},
+            }
+            ablated_fields = set().union(*omitted.values())
+            for trial in report["trials"]:
+                events = [json.loads(line) for line in (root / "ablation" / trial["run"] / "trace.jsonl").read_text().splitlines()]
+                call = next(event for event in events if event["kind"] == "model_call" and event["step"] == 3)
+                checkpoint = call["data"]["input"]["checkpoint"]
+                self.assertEqual(set(checkpoint) & ablated_fields, ablated_fields - omitted[trial["condition"]])
+                self.assertTrue(trial["metrics"]["passed"])
+
     def test_checkpoint_resumes_with_fresh_history_and_agent_selected_read(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"

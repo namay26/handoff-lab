@@ -27,7 +27,7 @@ def workspace_digest(workspace: Path) -> str:
     return manifest_digest(file_manifest(workspace))
 
 
-def checkpoint_for_context(saved: dict[str, Any], workspace: Path) -> dict[str, Any]:
+def checkpoint_for_context(saved: dict[str, Any], workspace: Path, mode: str = "checkpoint") -> dict[str, Any]:
     view = deepcopy(saved)
     files = file_manifest(workspace)
     current = manifest_digest(files)
@@ -39,6 +39,13 @@ def checkpoint_for_context(saved: dict[str, Any], workspace: Path) -> dict[str, 
         view["latest_test"]["current"] = view["latest_test"]["workspace_digest"] == current
     if view.get("agent_notes"):
         view["agent_notes"]["current"] = view["agent_notes"].get("workspace_digest") == current
+    if mode == "without-notes":
+        view.pop("agent_notes", None)
+    elif mode == "without-tests":
+        view.pop("latest_test", None)
+    elif mode == "without-files":
+        for key in ("files_read", "files_written", "workspace_files"):
+            view.pop(key, None)
     return view
 
 

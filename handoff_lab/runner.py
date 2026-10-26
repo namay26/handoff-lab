@@ -16,6 +16,9 @@ from .checkpoint import build_checkpoint, checkpoint_for_context, file_manifest,
 from .models import BedrockModel, GeminiModel, OpenAIModel, ScriptedModel
 
 
+HANDOFF_MODES = ("checkpoint", "minimal", "without-notes", "without-tests", "without-files")
+
+
 def timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
@@ -166,8 +169,8 @@ def resume_task(
     context_policy: str | None = None, context_threshold: int | None = None,
     pause_after: int | None = None, handoff_mode: str = "checkpoint",
 ) -> dict[str, Any]:
-    if handoff_mode not in {"checkpoint", "minimal"}:
-        raise ValueError("handoff_mode must be checkpoint or minimal")
+    if handoff_mode not in HANDOFF_MODES:
+        raise ValueError(f"handoff_mode must be one of: {', '.join(HANDOFF_MODES)}")
     run_dir = run_dir.resolve()
     metadata = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     prior = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
@@ -207,14 +210,14 @@ def resume_task(
     save_checkpoint(run_dir, task, checkpoint["last_step"], checkpoint["state"], checkpoint["agent_notes"])
     return run_session(task, run_dir, model, metadata, checkpoint["state"], checkpoint["last_step"],
                        session, prior, policy, threshold, pause_after,
-                       handoff if handoff_mode == "checkpoint" else None)
+                       handoff if handoff_mode != "minimal" else None, handoff_mode)
 
 
 def run_session(
     task: dict[str, Any], run_dir: Path, model: Any, metadata: dict[str, Any],
     state: str, start_step: int, session: int, prior: dict[str, Any] | None,
     context_policy: str, context_threshold: int, pause_after: int | None,
-    handoff: dict[str, Any] | None,
+    handoff: dict[str, Any] | None, handoff_mode: str = "checkpoint",
 ) -> dict[str, Any]:
     workspace = run_dir / "workspace"
     trace = Trace(run_dir / "trace.jsonl")
@@ -243,7 +246,7 @@ def run_session(
             **window.context_history(history),
         }
         if handoff:
-            context["checkpoint"] = checkpoint_for_context(handoff, workspace)
+            context["checkpoint"] = checkpoint_for_context(handoff, workspace, handoff_mode)
         try:
             print(f"Step {step}: requesting next action from {model.label}", file=sys.stderr, flush=True)
             if isinstance(model, GeminiModel):

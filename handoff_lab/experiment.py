@@ -11,7 +11,7 @@ from typing import Any
 
 from .checkpoint import trace_events, workspace_digest, write_json_atomic
 from .context import prompt_tokens
-from .runner import resume_task
+from .runner import HANDOFF_MODES, resume_task
 from .viewer import render_viewer
 
 
@@ -59,8 +59,17 @@ def render_experiment(report: dict[str, Any], output_dir: Path) -> Path:
         rows.append(f"<tr>{cells}<td><a href=\"{viewer}\">trace</a></td></tr>")
     headers = ["Trial", "Condition", "Status", "Passed", "Actions", "Prompt tokens", "Same-version rereads", "Test runs", "Viewer"]
     heading = "".join(f"<th>{html.escape(label)}</th>" for label in headers)
+    descriptions = {
+        "checkpoint": "full checkpoint",
+        "minimal": "no checkpoint",
+        "without-notes": "checkpoint without agent notes",
+        "without-tests": "checkpoint without latest test evidence",
+        "without-files": "checkpoint without read/write records and file manifest",
+    }
+    conditions = report.get("conditions", ["checkpoint", "minimal"])
+    condition_text = "; ".join(descriptions[condition] for condition in conditions)
     summaries = []
-    for condition in ("checkpoint", "minimal"):
+    for condition in conditions:
         metrics = [trial["metrics"] for trial in report["trials"]
                    if trial["condition"] == condition and trial["metrics"]["run_status"] != "ERROR"]
         if not metrics:
@@ -79,7 +88,8 @@ table{{width:100%;border-collapse:collapse;margin-top:24px;background:#121d30}}
 th,td{{padding:10px;text-align:left;border-bottom:1px solid #2a3a50}}th{{color:#8fe0ca}}
 a{{color:#8fe0ca}}code{{overflow-wrap:anywhere}}.wrap{{overflow-x:auto}}</style></head>
 <body><main><h1>Paired handoff experiment</h1>
-<p>All trials start from the same paused workspace and empty new-session history. The conditions differ only in whether the model sees the checkpoint. Metrics below count actions after resume.</p>
+<p>All trials start from the same paused workspace and empty new-session history. Each condition changes only the checkpoint fields passed to the model. Metrics below count actions after resume.</p>
+<p>Conditions: {html.escape(condition_text)}.</p>
 <p>Source step: {report['source_step']} · Workspace digest: <code>{html.escape(report['workspace_digest'])}</code> · Completed trials: {sum(item['metrics']['run_status'] != 'ERROR' for item in report['trials'])}/{report['planned_trials']} · Attempts: {len(report['trials'])}</p>
 <ul>{''.join(summaries)}</ul>
 <div class="wrap"><table><thead><tr>{heading}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>
@@ -94,11 +104,14 @@ def run_experiment(
     source_dir: Path, output_dir: Path, repeats: int = 2,
     model_kind: str | None = None, model_name: str | None = None,
     region: str | None = None, request_timeout: float = 45, retries: int = 1,
+    conditions: tuple[str, ...] = ("checkpoint", "minimal"),
 ) -> dict[str, Any]:
     source_dir = source_dir.resolve()
     output_dir = output_dir.resolve()
     if not 1 <= repeats <= 5:
         raise ValueError("repeats must be between 1 and 5")
+    if not conditions or len(set(conditions)) != len(conditions) or any(condition not in HANDOFF_MODES for condition in conditions):
+        raise ValueError(f"conditions must be distinct choices from: {', '.join(HANDOFF_MODES)}")
     if output_dir.is_relative_to(source_dir):
         raise ValueError("Experiment output must be outside the source run")
     source_result = json.loads((source_dir / "result.json").read_text(encoding="utf-8"))
@@ -119,7 +132,8 @@ def run_experiment(
         "source_step": checkpoint["last_step"],
         "source_event": checkpoint["last_event_id"],
         "workspace_digest": digest,
-        "planned_trials": repeats * 2,
+        "planned_trials": repeats * len(conditions),
+        "conditions": list(conditions),
         "handoff_prompt_tokens": handoff_tokens,
         "trials": [],
     }
@@ -128,14 +142,17 @@ def run_experiment(
         if not report_path.exists():
             raise ValueError("Existing output has no experiment report to continue")
         previous = json.loads(report_path.read_text(encoding="utf-8"))
+        previous.setdefault("conditions", ["checkpoint", "minimal"])
         if any(previous.get(key) != report[key] for key in ("source", "source_step", "source_event", "workspace_digest", "planned_trials")):
             raise ValueError("Existing experiment does not match this paused source")
+        if previous["conditions"] != report["conditions"]:
+            raise ValueError("Existing experiment uses different conditions")
         report = previous
     else:
         output_dir.mkdir(parents=True)
     for trial in range(1, repeats + 1):
-        conditions = ("checkpoint", "minimal") if trial % 2 else ("minimal", "checkpoint")
-        for condition in conditions:
+        order = conditions if trial % 2 else tuple(reversed(conditions))
+        for condition in order:
             attempts = [item for item in report["trials"] if item["trial"] == trial and item["condition"] == condition]
             if any(item["metrics"]["run_status"] != "ERROR" for item in attempts):
                 continue
