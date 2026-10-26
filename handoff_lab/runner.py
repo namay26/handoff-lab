@@ -164,8 +164,10 @@ def resume_task(
     run_dir: Path, model_kind: str | None = None, model_name: str | None = None,
     region: str | None = None, request_timeout: float = 45, retries: int = 1,
     context_policy: str | None = None, context_threshold: int | None = None,
-    pause_after: int | None = None,
+    pause_after: int | None = None, handoff_mode: str = "checkpoint",
 ) -> dict[str, Any]:
+    if handoff_mode not in {"checkpoint", "minimal"}:
+        raise ValueError("handoff_mode must be checkpoint or minimal")
     run_dir = run_dir.resolve()
     metadata = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     prior = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
@@ -201,10 +203,11 @@ def resume_task(
     session = int(prior.get("sessions", 1)) + 1
     trace.add("session_resume", checkpoint["last_step"], session=session,
               checkpoint_event=checkpoint["last_event_id"], changed_files=changed,
-              workspace_digest=workspace_digest(run_dir / "workspace"))
+              workspace_digest=workspace_digest(run_dir / "workspace"), handoff_mode=handoff_mode)
     save_checkpoint(run_dir, task, checkpoint["last_step"], checkpoint["state"], checkpoint["agent_notes"])
     return run_session(task, run_dir, model, metadata, checkpoint["state"], checkpoint["last_step"],
-                       session, prior, policy, threshold, pause_after, handoff)
+                       session, prior, policy, threshold, pause_after,
+                       handoff if handoff_mode == "checkpoint" else None)
 
 
 def run_session(

@@ -34,6 +34,17 @@ python3 -m handoff_lab compare UNINTERRUPTED_RUN_DIRECTORY RUN_DIRECTORY
 
 The first command saves `checkpoint.json` and exits with `PAUSED`. Resume creates a new model session with empty action history and passes the checkpoint. The model chooses which files to read. The checkpoint lists the goal, file hashes, prior reads and writes, latest test evidence, and an agent-written handoff note. The note is explicitly unverified. Tests are tied to a workspace digest; an edit makes an earlier result stale. Resume detects files changed outside the harness and records them in the trace. The trace viewer shows the handoff request, pause and resume events, the current checkpoint, and the exact first prompt after resume. Each session gets the task's step budget; global step numbers continue across sessions. Pausing uses one additional model call to write the handoff note.
 
+## Compare checkpoint and minimal resumes
+
+Pause one run, then use it as the shared starting state for a paired experiment:
+
+```bash
+python3 -m handoff_lab run tasks/login_flow.json --model gemini --model-name gemini-flash-lite-latest --pause-after 8 --out runs/paused-source
+python3 -m handoff_lab experiment runs/paused-source --out runs/paired-experiment --repeats 2
+```
+
+The experiment clones the paused workspace and trace for each trial. Both conditions start with empty new-session history. The checkpoint condition receives the saved handoff; the minimal condition receives the goal, state, available files, and acceptance command without that handoff. Trial order alternates. `experiment.html` links to each trace and compares post-resume completion, actions, prompt tokens, test runs, and reads of a file version already read before the pause. It reports the shared handoff-generation cost separately. The source run remains paused and unchanged. If a provider error stops a trial, rerun the same experiment command to retry that condition from the paused source; the failed attempt remains visible. A few stochastic trials are an exploratory comparison, not a general performance claim.
+
 ## Compare full and compact context
 
 The default `full` policy sends every prior action and tool result at each step. The `compact` policy waits until a model call reaches the token threshold, then replaces older history with a small structured summary while preserving the latest three action–observation steps. The summary records files read, files edited, and the latest test outcome; it omits old file contents and test logs. The agent can read a file or rerun tests when it needs those details. Compaction uses no extra model call, and the full trace remains available for inspection.

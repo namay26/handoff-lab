@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from handoff_lab.comparison import summarize_run
 from handoff_lab.context import ContextWindow
+from handoff_lab.experiment import run_experiment
 from handoff_lab.models import BedrockModel, GeminiModel, ModelReply, gemini_request, list_gemini_models
 from handoff_lab.runner import execute_action, resume_task, run_task
 from handoff_lab.viewer import render_viewer
@@ -31,6 +32,33 @@ class FinishOnlyModel:
 
 
 class HarnessIntegrationTests(unittest.TestCase):
+    def test_paired_experiment_uses_identical_prefix_and_two_prompt_conditions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            run_task(TASK, source, "scripted", pause_after=2)
+            original = (source / "checkpoint.json").read_text()
+            report = run_experiment(source, root / "experiment", repeats=1)
+            self.assertEqual((source / "checkpoint.json").read_text(), original)
+            self.assertEqual({item["condition"] for item in report["trials"]}, {"checkpoint", "minimal"})
+            self.assertTrue((root / "experiment" / "experiment.html").exists())
+            self.assertEqual(len(run_experiment(source, root / "experiment", repeats=1)["trials"]), 2)
+            for item in report["trials"]:
+                self.assertTrue(item["metrics"]["passed"])
+                run_dir = root / "experiment" / item["run"]
+                events = [json.loads(line) for line in (run_dir / "trace.jsonl").read_text().splitlines()]
+                call = next(event for event in events if event["kind"] == "model_call" and event["step"] == 3)
+                self.assertEqual(call["data"]["input"]["history"], [])
+                self.assertEqual("checkpoint" in call["data"]["input"], item["condition"] == "checkpoint")
+                self.assertEqual(events[0]["id"], "evt-0001")
+
+            partial = json.loads((root / "experiment" / "experiment.json").read_text())
+            partial["trials"][0]["metrics"]["run_status"] = "ERROR"
+            (root / "experiment" / "experiment.json").write_text(json.dumps(partial))
+            retried = run_experiment(source, root / "experiment", repeats=1)
+            self.assertEqual(len(retried["trials"]), 3)
+            self.assertTrue((root / "experiment" / "trial-1-checkpoint-retry-2" / "viewer.html").exists())
+
     def test_checkpoint_resumes_with_fresh_history_and_agent_selected_read(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"

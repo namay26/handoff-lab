@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .comparison import summarize_run
+from .experiment import run_experiment
 from .runner import resume_task, run_task
 from .models import list_gemini_models
 from .viewer import render_viewer
@@ -58,6 +59,16 @@ def main() -> None:
     resume.add_argument("--context-threshold", type=int)
     resume.add_argument("--pause-after", type=int)
 
+    experiment = sub.add_parser("experiment", help="compare checkpoint and minimal resumes from one paused run")
+    experiment.add_argument("source", type=Path, help="paused source run")
+    experiment.add_argument("--out", type=Path, required=True, help="new experiment directory")
+    experiment.add_argument("--repeats", type=int, default=2, help="trials per condition (default: 2)")
+    experiment.add_argument("--model", choices=["scripted", "gemini", "bedrock", "openai"])
+    experiment.add_argument("--model-name")
+    experiment.add_argument("--region", default=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"))
+    experiment.add_argument("--request-timeout", type=float, default=45)
+    experiment.add_argument("--retries", type=int, default=1)
+
     view = sub.add_parser("view", help="regenerate the HTML trace viewer")
     view.add_argument("run_dir", type=Path)
     compare = sub.add_parser("compare", help="compare saved run outcomes and context costs")
@@ -89,8 +100,19 @@ def main() -> None:
         parser.error("--request-timeout must be a positive number")
     if not 0 <= args.retries <= 3:
         parser.error("--retries must be between 0 and 3")
-    if args.context_threshold is not None and args.context_threshold <= 0:
+    if getattr(args, "context_threshold", None) is not None and args.context_threshold <= 0:
         parser.error("--context-threshold must be positive")
+    if args.command == "experiment":
+        try:
+            report = run_experiment(args.source, args.out, args.repeats, args.model,
+                                    args.model_name, args.region, args.request_timeout, args.retries)
+        except (ValueError, FileExistsError, OSError, KeyError, RuntimeError) as exc:
+            parser.error(str(exc))
+        print(json.dumps({"report": str(args.out.resolve() / "experiment.json"),
+                          "viewer": str(args.out.resolve() / "experiment.html"),
+                          "completed_trials": sum(item["metrics"]["run_status"] != "ERROR" for item in report["trials"]),
+                          "attempts": len(report["trials"])}, indent=2))
+        return
     try:
         if args.command == "run":
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
