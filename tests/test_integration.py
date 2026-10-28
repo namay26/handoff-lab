@@ -2,6 +2,7 @@
 
 import json
 import io
+import shutil
 import urllib.error
 import tempfile
 import unittest
@@ -12,7 +13,7 @@ from handoff_lab.comparison import summarize_run
 from handoff_lab.context import ContextWindow
 from handoff_lab.experiment import run_experiment
 from handoff_lab.models import BedrockModel, GeminiModel, ModelReply, gemini_request, list_gemini_models
-from handoff_lab.runner import execute_action, resume_task, run_task
+from handoff_lab.runner import execute_action, resume_task, run_check, run_task
 from handoff_lab.viewer import render_viewer
 
 
@@ -31,7 +32,58 @@ class FinishOnlyModel:
         )
 
 
+class StaleTestModel:
+    label = "stale-test-model"
+
+    def __init__(self):
+        self.index = 0
+        self.actions = [
+            {"action": "read_file", "path": "auth.py"},
+            {"action": "run_tests"},
+            {"action": "write_file", "path": "auth.py", "content": "def authenticate(username, password):\n    return False\n"},
+        ]
+
+    def next_action(self, context):
+        if context.get("handoff_only"):
+            action = {"action": "handoff", "learned": [], "remaining": ["Rerun tests"], "next_action": "run_tests"}
+        else:
+            action = self.actions[self.index]
+            self.index += 1
+        return ModelReply(action=action, raw_text=json.dumps(action), usage={})
+
+
 class HarnessIntegrationTests(unittest.TestCase):
+    def test_job_queue_fixture_exposes_independent_failures(self):
+        task = json.loads((PROJECT / "tasks" / "job_queue.json").read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            shutil.copytree(PROJECT / "fixtures" / "job_queue", workspace)
+            result = run_check(task, workspace)
+        self.assertFalse(result["passed"])
+        for name in ("test_duplicate_enqueue", "test_expired_lease", "test_worker_failure", "test_claim_survives"):
+            self.assertIn(name, result["stderr"])
+
+    def test_baseline_check_does_not_trigger_stale_test_pause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            result = run_task(TASK, run_dir, "scripted", pause_on_stale_test=True)
+            events = [json.loads(line) for line in (run_dir / "trace.jsonl").read_text().splitlines()]
+            self.assertEqual(result["run_status"], "COMPLETED")
+            self.assertFalse(any(event["kind"] == "session_pause" for event in events))
+
+    def test_pause_after_agent_test_becomes_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with patch("handoff_lab.runner.ScriptedModel", StaleTestModel):
+                result = run_task(TASK, run_dir, "scripted", pause_on_stale_test=True)
+            checkpoint = json.loads((run_dir / "checkpoint.json").read_text())
+            events = [json.loads(line) for line in (run_dir / "trace.jsonl").read_text().splitlines()]
+            self.assertEqual((result["run_status"], result["steps"]), ("PAUSED", 3))
+            self.assertEqual(checkpoint["latest_test"]["phase"], "agent")
+            self.assertFalse(checkpoint["latest_test"]["current"])
+            pause = next(event for event in events if event["kind"] == "session_pause")
+            self.assertEqual(pause["data"]["reason"], "stale_test")
+
     def test_paired_experiment_uses_identical_prefix_and_two_prompt_conditions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

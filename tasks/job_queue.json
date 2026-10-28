@@ -1,0 +1,9 @@
+{
+  "id": "durable-job-queue",
+  "title": "Repair a durable job queue",
+  "goal": "Repair the file-backed job queue across store.py, job_queue.py, and worker.py. Enqueueing an existing ID must preserve the original job. Claims must honor leases and reclaim an expired claim while counting attempts. Failed jobs may retry until max_attempts, then become terminal; completed jobs must never run again. Every state change must survive reopening the store. Preserve the public classes and methods used by the tests. Time is supplied as a number by the caller; do not read the real clock.",
+  "fixture_dir": "../fixtures/job_queue",
+  "editable_files": ["store.py", "job_queue.py", "worker.py"],
+  "acceptance_check": ["{python}", "-m", "unittest", "-v"],
+  "max_steps": 28
+}

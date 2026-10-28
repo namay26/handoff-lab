@@ -97,7 +97,7 @@ function label(e) {
   if (e.kind === 'model_call') return 'Model chose ' + (d.action?.action || 'action');
   if (e.kind === 'handoff_call') return 'Agent prepared handoff';
   if (e.kind === 'handoff_note') return 'Unverified handoff notes';
-  if (e.kind === 'session_pause') return 'Session ' + d.session + ' paused';
+  if (e.kind === 'session_pause') return 'Session ' + d.session + ' paused' + (d.reason === 'stale_test' ? ' · test evidence stale' : '');
   if (e.kind === 'session_resume') return 'Session ' + d.session + ' resumed';
   if (e.kind === 'session_start') return 'Session ' + d.session + ' started';
   if (e.kind === 'context_compaction') return 'Compacted steps ' + d.from_step + '–' + d.through_step;

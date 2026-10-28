@@ -128,7 +128,7 @@ def run_task(
     task_file: Path, run_dir: Path, model_kind: str, model_name: str | None = None,
     region: str | None = None, request_timeout: float = 45, retries: int = 1,
     context_policy: str = "full", context_threshold: int = 1500,
-    pause_after: int | None = None,
+    pause_after: int | None = None, pause_on_stale_test: bool = False,
 ) -> dict[str, Any]:
     task_file = task_file.resolve()
     task = json.loads(task_file.read_text(encoding="utf-8"))
@@ -139,6 +139,8 @@ def run_task(
         raise FileExistsError(f"Run directory already exists: {run_dir}")
     if pause_after is not None and not 1 <= pause_after <= int(task.get("max_steps", 8)):
         raise ValueError("pause_after must be within this session's step budget")
+    if pause_after is not None and pause_on_stale_test:
+        raise ValueError("Choose either pause_after or pause_on_stale_test")
     model = make_model(model_kind, model_name, region, request_timeout, retries)
     ContextWindow(context_policy, context_threshold)
     run_dir.mkdir(parents=True)
@@ -160,7 +162,8 @@ def run_task(
     trace.add("session_start", 0, session=1, resumed=False)
     save_checkpoint(run_dir, task, 0, "READY", None)
     return run_session(task, run_dir, model, metadata, "READY", 0, 1, None,
-                       context_policy, context_threshold, pause_after, None)
+                       context_policy, context_threshold, pause_after, None,
+                       pause_on_stale_test=pause_on_stale_test)
 
 
 def resume_task(
@@ -168,6 +171,7 @@ def resume_task(
     region: str | None = None, request_timeout: float = 45, retries: int = 1,
     context_policy: str | None = None, context_threshold: int | None = None,
     pause_after: int | None = None, handoff_mode: str = "checkpoint",
+    pause_on_stale_test: bool = False,
 ) -> dict[str, Any]:
     if handoff_mode not in HANDOFF_MODES:
         raise ValueError(f"handoff_mode must be one of: {', '.join(HANDOFF_MODES)}")
@@ -194,6 +198,8 @@ def resume_task(
     ContextWindow(policy, threshold)
     if pause_after is not None and not 1 <= pause_after <= int(task.get("max_steps", 8)):
         raise ValueError("pause_after must be within this session's step budget")
+    if pause_after is not None and pause_on_stale_test:
+        raise ValueError("Choose either pause_after or pause_on_stale_test")
     current_files = file_manifest(run_dir / "workspace")
     changed = sorted(path for path in set(current_files) | set(checkpoint["workspace_files"])
                      if current_files.get(path) != checkpoint["workspace_files"].get(path))
@@ -210,7 +216,8 @@ def resume_task(
     save_checkpoint(run_dir, task, checkpoint["last_step"], checkpoint["state"], checkpoint["agent_notes"])
     return run_session(task, run_dir, model, metadata, checkpoint["state"], checkpoint["last_step"],
                        session, prior, policy, threshold, pause_after,
-                       handoff if handoff_mode != "minimal" else None, handoff_mode)
+                       handoff if handoff_mode != "minimal" else None, handoff_mode,
+                       pause_on_stale_test)
 
 
 def run_session(
@@ -218,6 +225,7 @@ def run_session(
     state: str, start_step: int, session: int, prior: dict[str, Any] | None,
     context_policy: str, context_threshold: int, pause_after: int | None,
     handoff: dict[str, Any] | None, handoff_mode: str = "checkpoint",
+    pause_on_stale_test: bool = False,
 ) -> dict[str, Any]:
     workspace = run_dir / "workspace"
     trace = Trace(run_dir / "trace.jsonl")
@@ -228,6 +236,9 @@ def run_session(
     compactions = int(prior.get("compactions", 0)) if prior else 0
     handoff_calls = int(prior.get("handoff_calls", 0)) if prior else 0
     notes = handoff["agent_notes"] if handoff else None
+    prior_tests = [event for event in trace_events(run_dir / "trace.jsonl")
+                   if event["kind"] == "tool_result" and event["data"].get("action") == "run_tests"]
+    agent_test_digest = prior_tests[-1]["data"]["result"]["workspace_digest"] if prior_tests else None
     error: str | None = None
     steps_taken = start_step
     paused = False
@@ -266,6 +277,7 @@ def run_session(
                 trace.add("state", step, from_state=state, to_state="IMPLEMENTING")
                 state = "IMPLEMENTING"
             elif action["action"] == "run_tests":
+                agent_test_digest = observation["workspace_digest"]
                 target = "VERIFYING" if observation["passed"] else "NEEDS_CHANGES"
                 trace.add("state", step, from_state=state, to_state=target)
                 state = target
@@ -278,7 +290,9 @@ def run_session(
             save_checkpoint(run_dir, task, step, state, notes)
             if state == "DONE":
                 break
-            if pause_after == local_step:
+            stale_test = (action["action"] == "write_file" and agent_test_digest is not None
+                          and agent_test_digest != workspace_digest(workspace))
+            if pause_after == local_step or (pause_on_stale_test and stale_test):
                 handoff_context = {
                     **context,
                     "state": state,
@@ -289,7 +303,8 @@ def run_session(
                 prompt_total += used
                 handoff_calls += 1
                 notes = note
-                trace.add("session_pause", step, session=session)
+                trace.add("session_pause", step, session=session,
+                          reason="stale_test" if pause_on_stale_test and stale_test else "step")
                 save_checkpoint(run_dir, task, step, state, notes)
                 paused = True
                 break

@@ -47,6 +47,7 @@ def main() -> None:
     run.add_argument("--context-policy", choices=["full", "compact"], default="full", help="model history policy (default: full)")
     run.add_argument("--context-threshold", type=int, default=1500, help="compact after a prompt reaches this token count (default: 1500)")
     run.add_argument("--pause-after", type=int, help="pause after this many steps and write a handoff checkpoint")
+    run.add_argument("--pause-on-stale-test", action="store_true", help="pause after an agent test is made stale by a later edit")
 
     resume = sub.add_parser("resume", help="resume a paused run in a fresh agent session")
     resume.add_argument("run_dir", type=Path)
@@ -58,6 +59,7 @@ def main() -> None:
     resume.add_argument("--context-policy", choices=["full", "compact"])
     resume.add_argument("--context-threshold", type=int)
     resume.add_argument("--pause-after", type=int)
+    resume.add_argument("--pause-on-stale-test", action="store_true")
     resume.add_argument("--handoff-mode", choices=HANDOFF_MODES, default="checkpoint")
 
     experiment = sub.add_parser("experiment", help="compare checkpoint and minimal resumes from one paused run")
@@ -124,14 +126,14 @@ def main() -> None:
             result = run_task(
                 args.task, run_dir, args.model, args.model_name, args.region,
                 args.request_timeout, args.retries, args.context_policy, args.context_threshold,
-                args.pause_after,
+                args.pause_after, args.pause_on_stale_test,
             )
         else:
             run_dir = args.run_dir.resolve()
             result = resume_task(
                 run_dir, args.model, args.model_name, args.region,
                 args.request_timeout, args.retries, args.context_policy, args.context_threshold,
-                args.pause_after, args.handoff_mode,
+                args.pause_after, args.handoff_mode, args.pause_on_stale_test,
             )
     except (ValueError, FileExistsError, OSError, KeyError) as exc:
         parser.error(str(exc))

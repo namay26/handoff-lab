@@ -22,6 +22,16 @@ python3 -m handoff_lab run tasks/login_flow.json --model gemini --model-name gem
 
 The scripted demo actor is specific to the smaller `tasks/login.json` fixture.
 
+## Run the file-backed job queue task
+
+`tasks/job_queue.json` is a harder, deterministic task across `store.py`, `job_queue.py`, and `worker.py`. Twelve fixed tests cover duplicate IDs, lease expiry, retry limits, worker failures, and persistence after reopening the store. The seeded fixture starts with four passing tests and eight failures or errors. The task permits up to 28 model actions.
+
+```bash
+python3 -m handoff_lab run tasks/job_queue.json --model gemini --model-name gemini-flash-lite-latest --pause-on-stale-test
+```
+
+`--pause-on-stale-test` pauses after the agent runs tests and then edits a file, so the checkpoint contains a real agent test result marked stale against the new workspace digest. The trigger does not fire from the harness's initial baseline check. If the agent finishes without that sequence, the run simply continues to its normal outcome.
+
 ## Pause and resume with a checkpoint
 
 Use the longer task to compare a fresh session against an uninterrupted run:
