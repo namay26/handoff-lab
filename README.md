@@ -59,9 +59,12 @@ To test individual checkpoint components from the same paused source, choose the
 
 ```bash
 python3 -m handoff_lab experiment runs/paused-source --out runs/ablation --repeats 1 --conditions checkpoint,without-notes,without-tests,without-files
+
+# Compare the full checkpoint, a lean evidence checkpoint, and no checkpoint.
+python3 -m handoff_lab experiment runs/paused-source --out runs/comparison --repeats 2 --conditions checkpoint,lean,minimal
 ```
 
-Each `without-*` condition removes just the named checkpoint fields from the fresh session's prompt. The saved checkpoint and original paused run remain intact. The file condition removes read/write records and the file manifest; the current file-name list in the ordinary task prompt remains available.
+Each `without-*` condition removes just the named checkpoint fields from the fresh session's prompt. `lean` retains the goal, state, file read/write records, and latest test evidence while omitting agent notes and the full file manifest. The saved checkpoint and original paused run remain intact. The file condition removes read/write records and the file manifest; the current file-name list in the ordinary task prompt remains available.
 
 ## Compare full and compact context
 

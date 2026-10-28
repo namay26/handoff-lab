@@ -16,7 +16,7 @@ from .checkpoint import build_checkpoint, checkpoint_for_context, file_manifest,
 from .models import BedrockModel, GeminiModel, OpenAIModel, ScriptedModel
 
 
-HANDOFF_MODES = ("checkpoint", "minimal", "without-notes", "without-tests", "without-files")
+HANDOFF_MODES = ("checkpoint", "lean", "minimal", "without-notes", "without-tests", "without-files")
 
 
 def timestamp() -> str:

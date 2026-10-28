@@ -117,9 +117,10 @@ class HarnessIntegrationTests(unittest.TestCase):
             source = root / "source"
             run_task(TASK, source, "scripted", pause_after=2)
             report = run_experiment(source, root / "ablation", repeats=1,
-                                    conditions=("checkpoint", "without-notes", "without-tests", "without-files"))
+                                    conditions=("checkpoint", "lean", "without-notes", "without-tests", "without-files"))
             omitted = {
                 "checkpoint": set(),
+                "lean": {"agent_notes", "workspace_files"},
                 "without-notes": {"agent_notes"},
                 "without-tests": {"latest_test"},
                 "without-files": {"files_read", "files_written", "workspace_files"},

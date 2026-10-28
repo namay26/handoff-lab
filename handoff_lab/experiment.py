@@ -61,6 +61,7 @@ def render_experiment(report: dict[str, Any], output_dir: Path) -> Path:
     heading = "".join(f"<th>{html.escape(label)}</th>" for label in headers)
     descriptions = {
         "checkpoint": "full checkpoint",
+        "lean": "checkpoint with goal, state, file evidence, and latest test; without agent notes and file manifest",
         "minimal": "no checkpoint",
         "without-notes": "checkpoint without agent notes",
         "without-tests": "checkpoint without latest test evidence",
