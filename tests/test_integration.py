@@ -134,6 +134,36 @@ class HarnessIntegrationTests(unittest.TestCase):
                 self.assertEqual(set(checkpoint) & ablated_fields, ablated_fields - omitted[trial["condition"]])
                 self.assertTrue(trial["metrics"]["passed"])
 
+    def test_drift_marks_passing_evidence_stale_in_each_trial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            run_task(TASK, source, "scripted", pause_after=3)
+            original = (source / "workspace/auth.py").read_bytes()
+            saved = json.loads((source / "checkpoint.json").read_text())
+            self.assertTrue(saved["latest_test"]["passed"])
+            self.assertTrue(saved["latest_test"]["current"])
+            report = run_experiment(
+                source, root / "drift", repeats=1,
+                conditions=("checkpoint", "without-manifest"),
+                drift_target="auth.py", drift_from=PROJECT / "fixtures/login/auth.py",
+            )
+            self.assertEqual((source / "workspace/auth.py").read_bytes(), original)
+            self.assertEqual(len({trial["workspace_digest_at_resume"] for trial in report["trials"]}), 1)
+            self.assertNotEqual(report["trials"][0]["workspace_digest_at_resume"], saved["workspace_digest"])
+            for trial in report["trials"]:
+                events = [json.loads(line) for line in (root / "drift" / trial["run"] / "trace.jsonl").read_text().splitlines()]
+                resumed = next(event for event in events if event["kind"] == "session_resume")
+                self.assertEqual(resumed["data"]["changed_files"], ["auth.py"])
+                call = next(event for event in events if event["kind"] == "model_call" and event["step"] == 4)
+                checkpoint = call["data"]["input"]["checkpoint"]
+                self.assertTrue(checkpoint["workspace_changed"])
+                self.assertEqual(checkpoint["changed_files"], ["auth.py"])
+                self.assertFalse(checkpoint["latest_test"]["current"])
+                self.assertFalse(checkpoint["agent_notes"]["current"])
+                self.assertEqual("workspace_files" in checkpoint, trial["condition"] == "checkpoint")
+
+
     def test_checkpoint_resumes_with_fresh_history_and_agent_selected_read(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"

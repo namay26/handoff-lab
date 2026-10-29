@@ -67,6 +67,8 @@ def main() -> None:
     experiment.add_argument("--out", type=Path, required=True, help="new experiment directory")
     experiment.add_argument("--repeats", type=int, default=2, help="trials per condition (default: 2)")
     experiment.add_argument("--conditions", default="checkpoint,minimal", help="comma-separated prompt conditions")
+    experiment.add_argument("--drift-target", help="workspace file to change after each trial is cloned")
+    experiment.add_argument("--drift-from", type=Path, help="file whose bytes replace the drift target")
     experiment.add_argument("--model", choices=["scripted", "gemini", "bedrock", "openai"])
     experiment.add_argument("--model-name")
     experiment.add_argument("--region", default=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"))
@@ -111,7 +113,7 @@ def main() -> None:
         try:
             report = run_experiment(args.source, args.out, args.repeats, args.model,
                                     args.model_name, args.region, args.request_timeout, args.retries,
-                                    conditions)
+                                    conditions, args.drift_target, args.drift_from)
         except (ValueError, FileExistsError, OSError, KeyError, RuntimeError) as exc:
             parser.error(str(exc))
         print(json.dumps({"report": str(args.out.resolve() / "experiment.json"),

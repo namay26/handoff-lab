@@ -72,6 +72,12 @@ To isolate agent notes and the full file manifest, run all four combinations fro
 python3 -m handoff_lab experiment runs/paused-source --out runs/factorial --repeats 2 --conditions checkpoint,without-notes,without-manifest,lean
 ```
 
+To test a file changed between pause and resume, provide a replacement file. Each trial receives the same changed bytes, while the paused source stays unchanged:
+
+```bash
+python3 -m handoff_lab experiment runs/paused-source --out runs/drift --repeats 2 --conditions checkpoint,without-manifest --drift-target worker.py --drift-from fixtures/job_queue/worker.py
+```
+
 ## Compare full and compact context
 
 The default `full` policy sends every prior action and tool result at each step. The `compact` policy waits until a model call reaches the token threshold, then replaces older history with a small structured summary while preserving the latest three action–observation steps. The summary records files read, files edited, and the latest test outcome; it omits old file contents and test logs. The agent can read a file or rerun tests when it needs those details. Compaction uses no extra model call, and the full trace remains available for inspection.
