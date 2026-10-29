@@ -123,8 +123,14 @@ class GeminiModel:
         ).strip()
         try:
             action = json.loads(raw_text)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Gemini returned an incomplete or non-JSON action: {raw_text[:400]}") from exc
+        except json.JSONDecodeError:
+            start = raw_text.find("{")
+            try:
+                if start < 0:
+                    raise ValueError("No JSON object")
+                action = json.loads(raw_text[start:])
+            except ValueError as recovery_error:
+                raise RuntimeError(f"Gemini returned an incomplete or non-JSON action: {raw_text[:400]}") from recovery_error
         if not isinstance(action, dict):
             raise RuntimeError("Gemini action must be a JSON object")
         return ModelReply(action=action, raw_text=raw_text, usage=result.get("usageMetadata", {}))

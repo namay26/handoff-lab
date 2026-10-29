@@ -67,6 +67,7 @@ def main() -> None:
     experiment.add_argument("--out", type=Path, required=True, help="new experiment directory")
     experiment.add_argument("--repeats", type=int, default=2, help="trials per condition (default: 2)")
     experiment.add_argument("--conditions", default="checkpoint,minimal", help="comma-separated prompt conditions")
+    experiment.add_argument("--handoff-pauses", default="", help="comma-separated additional per-session pause steps, e.g. 5,5")
     experiment.add_argument("--drift-target", help="workspace file to change after each trial is cloned")
     experiment.add_argument("--drift-from", type=Path, help="file whose bytes replace the drift target")
     experiment.add_argument("--model", choices=["scripted", "gemini", "bedrock", "openai"])
@@ -111,9 +112,10 @@ def main() -> None:
     if args.command == "experiment":
         conditions = tuple(part.strip() for part in args.conditions.split(","))
         try:
+            handoff_pauses = tuple(int(part.strip()) for part in args.handoff_pauses.split(",") if part.strip())
             report = run_experiment(args.source, args.out, args.repeats, args.model,
                                     args.model_name, args.region, args.request_timeout, args.retries,
-                                    conditions, args.drift_target, args.drift_from)
+                                    conditions, args.drift_target, args.drift_from, handoff_pauses)
         except (ValueError, FileExistsError, OSError, KeyError, RuntimeError) as exc:
             parser.error(str(exc))
         print(json.dumps({"report": str(args.out.resolve() / "experiment.json"),

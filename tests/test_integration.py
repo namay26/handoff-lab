@@ -53,6 +53,28 @@ class StaleTestModel:
 
 
 class HarnessIntegrationTests(unittest.TestCase):
+    def test_workspace_index_fixture_has_multi_module_failures(self):
+        task = json.loads((PROJECT / "tasks" / "workspace_index.json").read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            shutil.copytree(PROJECT / "fixtures" / "workspace_index", workspace)
+            result = run_check(task, workspace)
+        self.assertFalse(result["passed"])
+        for name in ("test_chunker_preserves", "test_deleted_file", "test_scanner_skips_hidden", "test_search_ranks"):
+            self.assertIn(name, result["stderr"])
+
+    def test_experiment_can_schedule_multiple_handoffs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            run_task(TASK, source, "scripted", pause_after=1)
+            report = run_experiment(source, root / "multi", repeats=1,
+                                    conditions=("checkpoint",), handoff_pauses=(1, 1))
+            metrics = report["trials"][0]["metrics"]
+            self.assertEqual(report["handoff_pauses"], [1, 1])
+            self.assertEqual((metrics["handoffs"], metrics["sessions"]), (3, 4))
+            self.assertTrue(metrics["passed"])
+
     def test_job_queue_fixture_exposes_independent_failures(self):
         task = json.loads((PROJECT / "tasks" / "job_queue.json").read_text())
         with tempfile.TemporaryDirectory() as tmp:
@@ -333,6 +355,25 @@ class HarnessIntegrationTests(unittest.TestCase):
         self.assertEqual(request.get_header("X-goog-api-key"), "test-gemini-secret")
         self.assertNotIn("test-gemini-secret", request.full_url)
         self.assertNotIn(b"test-gemini-secret", request.data)
+
+    def test_gemini_recovers_single_json_object_after_stray_prefix(self):
+        response = {"candidates": [{"content": {"parts": [
+            {"text": '岨allow{"action":"read_file","path":"index.py"}'},
+        ]}}]}
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-secret"}):
+            with patch("handoff_lab.models.gemini_request", return_value=response):
+                reply = GeminiModel("example-gemini").next_action({"task": "index"})
+        self.assertEqual(reply.action, {"action": "read_file", "path": "index.py"})
+        self.assertTrue(reply.raw_text.startswith("岨allow"))
+
+    def test_gemini_rejects_incomplete_json_after_prefix(self):
+        response = {"candidates": [{"content": {"parts": [
+            {"text": 'stray {"action":"read_file"'},
+        ]}}]}
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-secret"}):
+            with patch("handoff_lab.models.gemini_request", return_value=response):
+                with self.assertRaisesRegex(RuntimeError, "incomplete or non-JSON"):
+                    GeminiModel("example-gemini").next_action({"task": "index"})
 
     def test_gemini_discovery_filters_and_paginates(self):
         pages = [

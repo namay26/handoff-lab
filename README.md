@@ -32,6 +32,17 @@ python3 -m handoff_lab run tasks/job_queue.json --model gemini --model-name gemi
 
 `--pause-on-stale-test` pauses after the agent runs tests and then edits a file, so the checkpoint contains a real agent test result marked stale against the new workspace digest. The trigger does not fire from the harness's initial baseline check. If the agent finishes without that sequence, the run simply continues to its normal outcome.
 
+## Run the multi-handoff workspace index task
+
+`tasks/workspace_index.json` is a five-module incremental search task. Its 17 fixed tests cover recursive scanning, source line chunks, updates and deletions, persistence, and ranked search. The seeded workspace fails 10 tests. A clean reference passes all 17. The task allows 32 actions per session.
+
+```bash
+python3 -m handoff_lab run tasks/workspace_index.json --model gemini --model-name gemini-flash-lite-latest --pause-after 8 --out runs/workspace-index-source
+python3 -m handoff_lab experiment runs/workspace-index-source --out runs/workspace-index-three-handoffs --repeats 1 --conditions checkpoint,minimal --handoff-pauses 5,5
+```
+
+The first command creates handoff 1. Each trial then pauses after five actions in sessions 2 and 3, making up to three handoffs and four sessions total. A trial can finish early, so the report records actual handoffs and sessions. Each condition starts from an identical copy of the first paused workspace; later actions can diverge. The final session runs until completion or its step limit.
+
 ## Pause and resume with a checkpoint
 
 Use the longer task to compare a fresh session against an uninterrupted run:

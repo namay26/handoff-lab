@@ -1,0 +1,9 @@
+{
+  "id": "incremental-workspace-index",
+  "title": "Repair an incremental workspace search index",
+  "goal": "Repair a persistent workspace search index across scanner.py, chunker.py, storage.py, index.py, and search.py. Scan nested .md and .txt files in deterministic path order, excluding hidden paths, symlinks, unsupported extensions, and invalid UTF-8. Hash original file bytes. Chunk text by max_lines while preserving 1-based inclusive source line numbers, retaining a final partial chunk and omitting blank-only groups. A sync adds new files, replaces changed files and their old chunks, removes deleted files, preserves unchanged files, reports accurate counts, and persists changes across reopened stores. Search is case-insensitive, requires every query term as a whole word within one chunk, ranks by total term frequency then path and start line, and supports path_prefix and limit. Preserve the public functions and classes used by the tests. The acceptance suite is fixed; edit only the listed implementation files.",
+  "fixture_dir": "../fixtures/workspace_index",
+  "editable_files": ["scanner.py", "chunker.py", "storage.py", "index.py", "search.py"],
+  "acceptance_check": ["{python}", "-m", "unittest", "-v"],
+  "max_steps": 32
+}

@@ -32,6 +32,21 @@ def continuation_metrics(run_dir: Path, source_step: int) -> dict[str, Any]:
              if event["kind"] == "tool_result" and event["data"].get("action") == "read_file"]
     tests = [event["data"]["result"] for event in continuation
              if event["kind"] == "tool_result" and event["data"].get("action") == "run_tests"]
+    session_by_step = {event["step"]: event["data"]["session"] for event in events
+                       if event["kind"] == "model_call"}
+    first_read_session: dict[tuple[str, str], int] = {}
+    cross_session_rereads = 0
+    for event in events:
+        if event["kind"] != "tool_result" or event["data"].get("action") != "read_file":
+            continue
+        read = event["data"]["result"]
+        key = (read["path"], read["sha256"])
+        session = session_by_step[event["step"]]
+        if event["step"] > source_step and key in first_read_session and first_read_session[key] < session:
+            cross_session_rereads += 1
+        first_read_session.setdefault(key, session)
+    handoff_calls = [event for event in continuation if event["kind"] == "handoff_call"]
+    handoff_tokens = [prompt_tokens(event["data"].get("usage", {})) for event in handoff_calls]
     return {
         "model": result["model"],
         "run_status": result["run_status"],
@@ -40,8 +55,12 @@ def continuation_metrics(run_dir: Path, source_step: int) -> dict[str, Any]:
         "prompt_tokens": sum(tokens) if all(value is not None for value in tokens) else None,
         "file_reads": len(reads),
         "same_version_rereads": sum((read["path"], read["sha256"]) in prior_reads for read in reads),
+        "cross_session_rereads": cross_session_rereads,
         "test_runs": len(tests),
         "tests_passed": [test["passed"] for test in tests],
+        "additional_handoff_prompt_tokens": sum(handoff_tokens) if all(value is not None for value in handoff_tokens) else None,
+        "handoffs": sum(event["kind"] == "session_pause" for event in events),
+        "sessions": result["sessions"],
     }
 
 
@@ -53,12 +72,13 @@ def render_experiment(report: dict[str, Any], output_dir: Path) -> Path:
             trial["trial"], trial["condition"], metrics["run_status"],
             "yes" if metrics["passed"] else "no", metrics["actions"],
             metrics["prompt_tokens"] if metrics["prompt_tokens"] is not None else "unmeasured",
-            metrics["same_version_rereads"], metrics["test_runs"],
+            metrics.get("cross_session_rereads", metrics["same_version_rereads"]), metrics["test_runs"],
+            metrics.get("handoffs", 1), metrics.get("sessions", 2),
         ]
         cells = "".join(f"<td>{html.escape(str(value))}</td>" for value in values)
         viewer = html.escape(trial["run"] + "/viewer.html", quote=True)
         rows.append(f"<tr>{cells}<td><a href=\"{viewer}\">trace</a></td></tr>")
-    headers = ["Trial", "Condition", "Status", "Passed", "Actions", "Prompt tokens", "Same-version rereads", "Test runs", "Viewer"]
+    headers = ["Trial", "Condition", "Status", "Passed", "Actions", "Prompt tokens", "Cross-session rereads", "Test runs", "Handoffs", "Sessions", "Viewer"]
     heading = "".join(f"<th>{html.escape(label)}</th>" for label in headers)
     descriptions = {
         "checkpoint": "full checkpoint",
@@ -95,13 +115,13 @@ table{{width:100%;border-collapse:collapse;margin-top:24px;background:#121d30}}
 th,td{{padding:10px;text-align:left;border-bottom:1px solid #2a3a50}}th{{color:#8fe0ca}}
 a{{color:#8fe0ca}}code{{overflow-wrap:anywhere}}.wrap{{overflow-x:auto}}</style></head>
 <body><main><h1>Paired handoff experiment</h1>
-<p>All trials clone the same paused workspace and start with empty new-session history. When configured, the same file drift is applied to every clone before resume. Each condition changes only the checkpoint fields passed to the model. Metrics below count actions after resume.</p>
+<p>All trials clone the same paused workspace and start with empty new-session history. When configured, the same file drift is applied to every clone before resume. Each condition changes only the checkpoint fields passed to the model. Additional scheduled pauses per trial: {html.escape(str(report.get('handoff_pauses', [])))}. Metrics below count actions after the first pause.</p>
 <p>Conditions: {html.escape(condition_text)}.</p>
 {drift_text}
 <p>Source step: {report['source_step']} · Workspace digest: <code>{html.escape(report['workspace_digest'])}</code> · Completed trials: {sum(item['metrics']['run_status'] != 'ERROR' for item in report['trials'])}/{report['planned_trials']} · Attempts: {len(report['trials'])}</p>
 <ul>{''.join(summaries)}</ul>
 <div class="wrap"><table><thead><tr>{heading}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>
-<p>Prompt tokens exclude the shared prefix. Creating the handoff note cost {report['handoff_prompt_tokens'] if report['handoff_prompt_tokens'] is not None else 'unmeasured'} prompt tokens. Same-version rereads count reads of a file version already read before the pause. A few stochastic trials cannot establish a general performance advantage.</p>
+<p>Prompt tokens count continuation action calls and exclude the shared prefix and handoff-note calls. Creating the shared first handoff cost {report['handoff_prompt_tokens'] if report['handoff_prompt_tokens'] is not None else 'unmeasured'} prompt tokens. Later handoff-note costs are in each trial's JSON metrics. Cross-session rereads count reads of an unchanged file version already read in an earlier session. A few stochastic trials cannot establish a general performance advantage.</p>
 </main></body></html>"""
     path = output_dir / "experiment.html"
     path.write_text(document, encoding="utf-8")
@@ -114,6 +134,7 @@ def run_experiment(
     region: str | None = None, request_timeout: float = 45, retries: int = 1,
     conditions: tuple[str, ...] = ("checkpoint", "minimal"),
     drift_target: str | None = None, drift_from: Path | None = None,
+    handoff_pauses: tuple[int, ...] = (),
 ) -> dict[str, Any]:
     source_dir = source_dir.resolve()
     output_dir = output_dir.resolve()
@@ -121,10 +142,16 @@ def run_experiment(
         raise ValueError("repeats must be between 1 and 5")
     if not conditions or len(set(conditions)) != len(conditions) or any(condition not in HANDOFF_MODES for condition in conditions):
         raise ValueError(f"conditions must be distinct choices from: {', '.join(HANDOFF_MODES)}")
+    if any(not isinstance(pause, int) or pause < 1 for pause in handoff_pauses):
+        raise ValueError("handoff pauses must be positive step counts")
     if output_dir.is_relative_to(source_dir):
         raise ValueError("Experiment output must be outside the source run")
     source_result = json.loads((source_dir / "result.json").read_text(encoding="utf-8"))
     checkpoint = json.loads((source_dir / "checkpoint.json").read_text(encoding="utf-8"))
+    source_metadata = json.loads((source_dir / "run.json").read_text(encoding="utf-8"))
+    task = json.loads(Path(source_metadata["source_task"]).read_text(encoding="utf-8"))
+    if any(pause > int(task.get("max_steps", 8)) for pause in handoff_pauses):
+        raise ValueError("handoff pauses must fit within the task's session step budget")
     events = trace_events(source_dir / "trace.jsonl")
     if source_result["run_status"] != "PAUSED":
         raise ValueError("Experiment source must be a paused run")
@@ -159,6 +186,7 @@ def run_experiment(
         "workspace_digest": digest,
         "planned_trials": repeats * len(conditions),
         "conditions": list(conditions),
+        "handoff_pauses": list(handoff_pauses),
         "drift": drift,
         "handoff_prompt_tokens": handoff_tokens,
         "trials": [],
@@ -169,10 +197,13 @@ def run_experiment(
             raise ValueError("Existing output has no experiment report to continue")
         previous = json.loads(report_path.read_text(encoding="utf-8"))
         previous.setdefault("conditions", ["checkpoint", "minimal"])
+        previous.setdefault("handoff_pauses", [])
         if any(previous.get(key) != report[key] for key in ("source", "source_step", "source_event", "workspace_digest", "planned_trials", "drift")):
             raise ValueError("Existing experiment does not match this paused source")
         if previous["conditions"] != report["conditions"]:
             raise ValueError("Existing experiment uses different conditions")
+        if previous["handoff_pauses"] != report["handoff_pauses"]:
+            raise ValueError("Existing experiment uses different handoff pauses")
         report = previous
     else:
         output_dir.mkdir(parents=True)
@@ -197,9 +228,14 @@ def run_experiment(
             resumed_digest = workspace_digest(run_dir / "workspace")
             if drift and resumed_digest == digest:
                 raise ValueError("Drift did not change the workspace digest")
-            print(f"Trial {trial}/{repeats}: resuming {condition}", file=sys.stderr, flush=True)
-            resume_task(run_dir, model_kind, model_name, region, request_timeout, retries,
-                        handoff_mode=condition)
+            for pause in (*handoff_pauses, None):
+                print(f"Trial {trial}/{repeats}: resuming {condition}"
+                      + (f" for {pause} steps" if pause else " to completion"),
+                      file=sys.stderr, flush=True)
+                result = resume_task(run_dir, model_kind, model_name, region, request_timeout, retries,
+                                     pause_after=pause, handoff_mode=condition)
+                if result["run_status"] != "PAUSED":
+                    break
             render_viewer(run_dir)
             report["trials"].append({"trial": trial, "condition": condition,
                                      "run": name, "workspace_digest_at_resume": resumed_digest,
