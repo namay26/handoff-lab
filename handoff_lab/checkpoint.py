@@ -44,6 +44,8 @@ def checkpoint_for_context(saved: dict[str, Any], workspace: Path, mode: str = "
             view.pop(key, None)
     elif mode == "without-notes":
         view.pop("agent_notes", None)
+    elif mode == "without-manifest":
+        view.pop("workspace_files", None)
     elif mode == "without-tests":
         view.pop("latest_test", None)
     elif mode == "without-files":

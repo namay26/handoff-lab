@@ -66,6 +66,12 @@ python3 -m handoff_lab experiment runs/paused-source --out runs/comparison --rep
 
 Each `without-*` condition removes just the named checkpoint fields from the fresh session's prompt. `lean` retains the goal, state, file read/write records, and latest test evidence while omitting agent notes and the full file manifest. The saved checkpoint and original paused run remain intact. The file condition removes read/write records and the file manifest; the current file-name list in the ordinary task prompt remains available.
 
+To isolate agent notes and the full file manifest, run all four combinations from the same source:
+
+```bash
+python3 -m handoff_lab experiment runs/paused-source --out runs/factorial --repeats 2 --conditions checkpoint,without-notes,without-manifest,lean
+```
+
 ## Compare full and compact context
 
 The default `full` policy sends every prior action and tool result at each step. The `compact` policy waits until a model call reaches the token threshold, then replaces older history with a small structured summary while preserving the latest three action–observation steps. The summary records files read, files edited, and the latest test outcome; it omits old file contents and test logs. The agent can read a file or rerun tests when it needs those details. Compaction uses no extra model call, and the full trace remains available for inspection.

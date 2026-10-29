@@ -64,6 +64,7 @@ def render_experiment(report: dict[str, Any], output_dir: Path) -> Path:
         "lean": "checkpoint with goal, state, file evidence, and latest test; without agent notes and file manifest",
         "minimal": "no checkpoint",
         "without-notes": "checkpoint without agent notes",
+        "without-manifest": "checkpoint without full file manifest",
         "without-tests": "checkpoint without latest test evidence",
         "without-files": "checkpoint without read/write records and file manifest",
     }
