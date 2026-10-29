@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from .context import ContextWindow, estimate_tokens, prompt_tokens
-from .checkpoint import build_checkpoint, checkpoint_for_context, file_manifest, trace_events, workspace_digest, write_json_atomic
+from .checkpoint import build_checkpoint, checkpoint_for_context, file_manifest, stored_manifest, trace_events, workspace_digest, write_json_atomic
 from .models import BedrockModel, GeminiModel, OpenAIModel, ScriptedModel
 
 
-HANDOFF_MODES = ("checkpoint", "lean", "minimal", "without-notes", "without-manifest", "without-tests", "without-files")
+HANDOFF_MODES = ("checkpoint", "lean", "minimal", "without-notes", "without-tests", "without-files")
 
 
 def timestamp() -> str:
@@ -119,7 +119,10 @@ def make_model(kind: str, name: str | None, region: str | None, timeout: float, 
 
 
 def save_checkpoint(run_dir: Path, task: dict[str, Any], step: int, state: str, notes: dict[str, Any] | None) -> dict[str, Any]:
-    checkpoint = build_checkpoint(task, run_dir / "workspace", run_dir / "trace.jsonl", step, state, notes)
+    files = file_manifest(run_dir / "workspace")
+    checkpoint = build_checkpoint(task, files, run_dir / "trace.jsonl", step, state, notes)
+    write_json_atomic(run_dir / "workspace_manifest.json",
+                      {"last_event_id": checkpoint["last_event_id"], "workspace_files": files})
     write_json_atomic(run_dir / "checkpoint.json", checkpoint)
     return checkpoint
 
@@ -186,7 +189,7 @@ def resume_task(
     task = json.loads(task_file.read_text(encoding="utf-8"))
     checkpoint = json.loads((run_dir / "checkpoint.json").read_text(encoding="utf-8"))
     events = trace_events(run_dir / "trace.jsonl")
-    if checkpoint["schema_version"] != 1 or checkpoint["last_event_id"] != events[-1]["id"]:
+    if checkpoint["schema_version"] not in {1, 2} or checkpoint["last_event_id"] != events[-1]["id"]:
         raise ValueError("Checkpoint and trace are out of sync; inspect the run before resuming")
     if checkpoint["last_step"] != prior["steps"] or checkpoint["task"]["id"] != task["id"]:
         raise ValueError("Checkpoint does not match the paused run")
@@ -201,8 +204,9 @@ def resume_task(
     if pause_after is not None and pause_on_stale_test:
         raise ValueError("Choose either pause_after or pause_on_stale_test")
     current_files = file_manifest(run_dir / "workspace")
-    changed = sorted(path for path in set(current_files) | set(checkpoint["workspace_files"])
-                     if current_files.get(path) != checkpoint["workspace_files"].get(path))
+    previous_files = stored_manifest(run_dir, checkpoint)
+    changed = sorted(path for path in set(current_files) | set(previous_files)
+                     if current_files.get(path) != previous_files.get(path))
     handoff = {**checkpoint, "workspace_changed": bool(changed), "changed_files": changed}
     if changed:
         if handoff["latest_test"]:

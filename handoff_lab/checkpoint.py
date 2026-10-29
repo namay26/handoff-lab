@@ -29,6 +29,7 @@ def workspace_digest(workspace: Path) -> str:
 
 def checkpoint_for_context(saved: dict[str, Any], workspace: Path, mode: str = "checkpoint") -> dict[str, Any]:
     view = deepcopy(saved)
+    view.pop("workspace_files", None)
     files = file_manifest(workspace)
     current = manifest_digest(files)
     view["current_workspace_digest"] = current
@@ -40,18 +41,31 @@ def checkpoint_for_context(saved: dict[str, Any], workspace: Path, mode: str = "
     if view.get("agent_notes"):
         view["agent_notes"]["current"] = view["agent_notes"].get("workspace_digest") == current
     if mode == "lean":
-        for key in ("agent_notes", "workspace_files"):
-            view.pop(key, None)
+        view.pop("agent_notes", None)
     elif mode == "without-notes":
         view.pop("agent_notes", None)
-    elif mode == "without-manifest":
-        view.pop("workspace_files", None)
     elif mode == "without-tests":
         view.pop("latest_test", None)
     elif mode == "without-files":
-        for key in ("files_read", "files_written", "workspace_files"):
+        for key in ("files_read", "files_written"):
             view.pop(key, None)
     return view
+
+
+def stored_manifest(run_dir: Path, checkpoint: dict[str, Any]) -> dict[str, str]:
+    path = run_dir / "workspace_manifest.json"
+    if path.exists():
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if record.get("last_event_id") != checkpoint["last_event_id"]:
+            raise ValueError("Workspace manifest and checkpoint are out of sync")
+        files = record["workspace_files"]
+    else:
+        files = checkpoint.get("workspace_files")
+        if files is None:
+            raise ValueError("Workspace manifest is missing")
+    if manifest_digest(files) != checkpoint["workspace_digest"]:
+        raise ValueError("Workspace manifest digest does not match checkpoint")
+    return files
 
 
 def trace_events(path: Path) -> list[dict[str, Any]]:
@@ -65,11 +79,10 @@ def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
 
 
 def build_checkpoint(
-    task: dict[str, Any], workspace: Path, trace_path: Path, step: int, state: str,
+    task: dict[str, Any], files: dict[str, str], trace_path: Path, step: int, state: str,
     agent_notes: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     events = trace_events(trace_path)
-    files = file_manifest(workspace)
     digest = manifest_digest(files)
     reads: dict[str, dict[str, Any]] = {}
     writes: dict[str, dict[str, Any]] = {}
@@ -92,12 +105,11 @@ def build_checkpoint(
     if notes.get("workspace_digest"):
         notes = {**notes, "current": notes["workspace_digest"] == digest}
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "task": {"id": task["id"], "goal": task["goal"], "acceptance_check": task["acceptance_check"]},
         "last_step": step,
         "last_event_id": events[-1]["id"] if events else None,
         "state": state,
-        "workspace_files": files,
         "workspace_digest": digest,
         "files_read": list(reads.values()),
         "files_written": list(writes.values()),

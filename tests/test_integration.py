@@ -117,14 +117,13 @@ class HarnessIntegrationTests(unittest.TestCase):
             source = root / "source"
             run_task(TASK, source, "scripted", pause_after=2)
             report = run_experiment(source, root / "ablation", repeats=1,
-                                    conditions=("checkpoint", "lean", "without-notes", "without-manifest", "without-tests", "without-files"))
+                                    conditions=("checkpoint", "lean", "without-notes", "without-tests", "without-files"))
             omitted = {
                 "checkpoint": set(),
-                "lean": {"agent_notes", "workspace_files"},
+                "lean": {"agent_notes"},
                 "without-notes": {"agent_notes"},
-                "without-manifest": {"workspace_files"},
                 "without-tests": {"latest_test"},
-                "without-files": {"files_read", "files_written", "workspace_files"},
+                "without-files": {"files_read", "files_written"},
             }
             ablated_fields = set().union(*omitted.values())
             for trial in report["trials"]:
@@ -132,6 +131,7 @@ class HarnessIntegrationTests(unittest.TestCase):
                 call = next(event for event in events if event["kind"] == "model_call" and event["step"] == 3)
                 checkpoint = call["data"]["input"]["checkpoint"]
                 self.assertEqual(set(checkpoint) & ablated_fields, ablated_fields - omitted[trial["condition"]])
+                self.assertNotIn("workspace_files", checkpoint)
                 self.assertTrue(trial["metrics"]["passed"])
 
     def test_drift_marks_passing_evidence_stale_in_each_trial(self):
@@ -145,7 +145,7 @@ class HarnessIntegrationTests(unittest.TestCase):
             self.assertTrue(saved["latest_test"]["current"])
             report = run_experiment(
                 source, root / "drift", repeats=1,
-                conditions=("checkpoint", "without-manifest"),
+                conditions=("checkpoint", "lean"),
                 drift_target="auth.py", drift_from=PROJECT / "fixtures/login/auth.py",
             )
             self.assertEqual((source / "workspace/auth.py").read_bytes(), original)
@@ -160,8 +160,40 @@ class HarnessIntegrationTests(unittest.TestCase):
                 self.assertTrue(checkpoint["workspace_changed"])
                 self.assertEqual(checkpoint["changed_files"], ["auth.py"])
                 self.assertFalse(checkpoint["latest_test"]["current"])
-                self.assertFalse(checkpoint["agent_notes"]["current"])
-                self.assertEqual("workspace_files" in checkpoint, trial["condition"] == "checkpoint")
+                if trial["condition"] == "checkpoint":
+                    self.assertFalse(checkpoint["agent_notes"]["current"])
+                self.assertNotIn("workspace_files", checkpoint)
+                self.assertNotIn("workspace_files", saved)
+                self.assertTrue((source / "workspace_manifest.json").exists())
+
+    def test_legacy_checkpoint_moves_manifest_to_harness_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_task(TASK, run_dir, "scripted", pause_after=2)
+            checkpoint_path = run_dir / "checkpoint.json"
+            manifest_path = run_dir / "workspace_manifest.json"
+            checkpoint = json.loads(checkpoint_path.read_text())
+            checkpoint["schema_version"] = 1
+            checkpoint["workspace_files"] = json.loads(manifest_path.read_text())["workspace_files"]
+            checkpoint_path.write_text(json.dumps(checkpoint))
+            manifest_path.unlink()
+            result = resume_task(run_dir)
+            updated = json.loads(checkpoint_path.read_text())
+            self.assertEqual(result["run_status"], "COMPLETED")
+            self.assertEqual(updated["schema_version"], 2)
+            self.assertNotIn("workspace_files", updated)
+            self.assertTrue(manifest_path.exists())
+
+    def test_resume_rejects_manifest_from_another_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_task(TASK, run_dir, "scripted", pause_after=2)
+            path = run_dir / "workspace_manifest.json"
+            manifest = json.loads(path.read_text())
+            manifest["last_event_id"] = "evt-other"
+            path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, "manifest and checkpoint are out of sync"):
+                resume_task(run_dir)
 
 
     def test_checkpoint_resumes_with_fresh_history_and_agent_selected_read(self):

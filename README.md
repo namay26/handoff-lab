@@ -42,7 +42,7 @@ python3 -m handoff_lab resume RUN_DIRECTORY
 python3 -m handoff_lab compare UNINTERRUPTED_RUN_DIRECTORY RUN_DIRECTORY
 ```
 
-The first command saves `checkpoint.json` and exits with `PAUSED`. Resume creates a new model session with empty action history and passes the checkpoint. The model chooses which files to read. The checkpoint lists the goal, file hashes, prior reads and writes, latest test evidence, and an agent-written handoff note. The note is explicitly unverified. Tests are tied to a workspace digest; an edit makes an earlier result stale. Resume detects files changed outside the harness and records them in the trace. The trace viewer shows the handoff request, pause and resume events, the current checkpoint, and the exact first prompt after resume. Each session gets the task's step budget; global step numbers continue across sessions. Pausing uses one additional model call to write the handoff note.
+The first command saves `checkpoint.json` and exits with `PAUSED`. Resume creates a new model session with empty action history and passes the checkpoint. The model chooses which files to read. The checkpoint lists the goal, versioned read and write records, latest test evidence, and an agent-written handoff note. The note is explicitly unverified. The full workspace hash map is stored separately in `workspace_manifest.json` for the harness, not in the checkpoint or model prompt. Tests are tied to a workspace digest; an edit makes an earlier result stale. Resume detects files changed outside the harness and records them in the trace. The trace viewer shows the handoff request, pause and resume events, the current checkpoint, and the exact first prompt after resume. Each session gets the task's step budget; global step numbers continue across sessions. Pausing uses one additional model call to write the handoff note.
 
 ## Compare checkpoint and minimal resumes
 
@@ -60,22 +60,16 @@ To test individual checkpoint components from the same paused source, choose the
 ```bash
 python3 -m handoff_lab experiment runs/paused-source --out runs/ablation --repeats 1 --conditions checkpoint,without-notes,without-tests,without-files
 
-# Compare the full checkpoint, a lean evidence checkpoint, and no checkpoint.
+# Compare the checkpoint, one without agent notes, and no checkpoint.
 python3 -m handoff_lab experiment runs/paused-source --out runs/comparison --repeats 2 --conditions checkpoint,lean,minimal
 ```
 
-Each `without-*` condition removes just the named checkpoint fields from the fresh session's prompt. `lean` retains the goal, state, file read/write records, and latest test evidence while omitting agent notes and the full file manifest. The saved checkpoint and original paused run remain intact. The file condition removes read/write records and the file manifest; the current file-name list in the ordinary task prompt remains available.
-
-To isolate agent notes and the full file manifest, run all four combinations from the same source:
-
-```bash
-python3 -m handoff_lab experiment runs/paused-source --out runs/factorial --repeats 2 --conditions checkpoint,without-notes,without-manifest,lean
-```
+Each `without-*` condition removes just the named checkpoint fields from the fresh session's prompt. `lean` currently omits agent notes, equivalent to `without-notes`. The saved checkpoint and original paused run remain intact. The file condition removes read/write records; the current file-name list in the ordinary task prompt remains available.
 
 To test a file changed between pause and resume, provide a replacement file. Each trial receives the same changed bytes, while the paused source stays unchanged:
 
 ```bash
-python3 -m handoff_lab experiment runs/paused-source --out runs/drift --repeats 2 --conditions checkpoint,without-manifest --drift-target worker.py --drift-from fixtures/job_queue/worker.py
+python3 -m handoff_lab experiment runs/paused-source --out runs/drift --repeats 2 --conditions checkpoint,lean --drift-target worker.py --drift-from fixtures/job_queue/worker.py
 ```
 
 ## Compare full and compact context
@@ -126,6 +120,7 @@ Each run directory contains:
 - `trace.jsonl`: every model input, chosen action, tool result, state change, and acceptance-check result.
 - `run.json` and `result.json`: run metadata and final outcome.
 - `checkpoint.json`: current versioned handoff state and evidence references.
+- `workspace_manifest.json`: harness-owned file hashes for detecting workspace changes.
 - `viewer.html`: interactive, self-contained timeline. Select an event to inspect its exact recorded data.
 
 Regenerate a viewer after processing a trace with `python3 -m handoff_lab view RUN_DIRECTORY`.

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .checkpoint import trace_events, workspace_digest, write_json_atomic
+from .checkpoint import stored_manifest, trace_events, workspace_digest, write_json_atomic
 from .context import prompt_tokens
 from .runner import HANDOFF_MODES, resume_task, safe_file
 from .viewer import render_viewer
@@ -62,12 +62,12 @@ def render_experiment(report: dict[str, Any], output_dir: Path) -> Path:
     heading = "".join(f"<th>{html.escape(label)}</th>" for label in headers)
     descriptions = {
         "checkpoint": "full checkpoint",
-        "lean": "checkpoint with goal, state, file evidence, and latest test; without agent notes and file manifest",
+        "lean": "checkpoint without agent notes",
         "minimal": "no checkpoint",
         "without-notes": "checkpoint without agent notes",
         "without-manifest": "checkpoint without full file manifest",
         "without-tests": "checkpoint without latest test evidence",
-        "without-files": "checkpoint without read/write records and file manifest",
+        "without-files": "checkpoint without read/write records",
     }
     conditions = report.get("conditions", ["checkpoint", "minimal"])
     condition_text = "; ".join(descriptions[condition] for condition in conditions)
@@ -130,6 +130,7 @@ def run_experiment(
         raise ValueError("Experiment source must be a paused run")
     if checkpoint["last_event_id"] != events[-1]["id"] or checkpoint["last_step"] != source_result["steps"]:
         raise ValueError("Source checkpoint and trace are out of sync")
+    stored_manifest(source_dir, checkpoint)
     digest = workspace_digest(source_dir / "workspace")
     if checkpoint["workspace_digest"] != digest:
         raise ValueError("Source workspace changed after the pause")
